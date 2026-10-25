@@ -1,0 +1,13 @@
+// Per-team configuration for the iPhone companion. Edit these, or set them in Xcode under
+// Signing & Capabilities / Build Settings.
+
+// Your Apple Developer Team ID (Xcode > Settings > Accounts). Required to run on an iPhone.
+DEVELOPMENT_TEAM =
+
+// Must be unique per team; change it if Xcode reports the ID is taken.
+COMPANION_BUNDLE_ID = com.metarayzer.companion
+
+// Meta Wearables Developer Center credentials. Leave empty while the glasses' Meta AI app has
+// Developer Mode enabled (the SDK then skips attestation). Required for release-channel builds.
+META_APP_ID =
+CLIENT_TOKEN =
