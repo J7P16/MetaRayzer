@@ -1,8 +1,13 @@
 # MetaRayzer
 
-Real-time hand tracking on the camera feed of **Ray-Ban Meta (Gen 2)** glasses, displayed in a
-**Flutter macOS** app. Up to two hands are detected and tracked. Each hand's position is computed
-relative to the center of the camera frame and drawn as a dot over the live preview.
+A **Flutter macOS** hand-gesture game platform driven by the camera of **Ray-Ban Meta (Gen 2)**
+glasses. Its first minigame is **Wizard's Stand**, a first-person wizard shooter: close your left
+hand into a fist to ready a spell, snap it open to throw a fireball at the nearest enemy.
+
+Under the game is the real-time hand-tracking pipeline. It detects and tracks up to two hands,
+computes each hand's position relative to the center of the camera frame, and classifies the hand
+pose (fist / open palm). The original tracking view is still available as the *Glasses & tracking
+setup* screen.
 
 ```
 Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (TCP)──▶ Mac: Flutter app
@@ -25,16 +30,19 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 2. [Prerequisites](#prerequisites)
 3. [Meta developer and glasses setup (manual)](#meta-developer-and-glasses-setup-manual)
 4. [Install and run](#install-and-run)
-5. [Using the app](#using-the-app)
-6. [Verifying hand detection](#verifying-hand-detection)
-7. [Architecture](#architecture)
-8. [Coordinate system](#coordinate-system)
-9. [Hand-detection model](#hand-detection-model)
-10. [Tracking](#tracking)
-11. [Testing](#testing)
-12. [Troubleshooting](#troubleshooting)
-13. [Known limitations and future work](#known-limitations-and-future-work)
-14. [Platform constraints and verification](#platform-constraints-and-verification)
+5. [Playing Wizard's Stand](#playing-wizards-stand)
+6. [Game rules and tuning](#game-rules-and-tuning)
+7. [Game platform architecture](#game-platform-architecture)
+8. [Using the tracking setup screen](#using-the-tracking-setup-screen)
+9. [Verifying hand detection](#verifying-hand-detection)
+10. [Architecture](#architecture)
+11. [Coordinate system](#coordinate-system)
+12. [Hand-detection model](#hand-detection-model)
+13. [Tracking](#tracking)
+14. [Testing](#testing)
+15. [Troubleshooting](#troubleshooting)
+16. [Known limitations and future work](#known-limitations-and-future-work)
+17. [Platform constraints and verification](#platform-constraints-and-verification)
 
 ---
 
@@ -47,11 +55,18 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 | Hand detection on real photos (Apple Vision), 1 and 2 hands, 21 landmarks each | ✅ verified (`tool/vision_probe.sh` on MediaPipe's Apache-2.0 test images) |
 | Overlay mapping on real frames: letterboxed, cropped and mirrored, and rotated views | ✅ verified (rendered the real UI widget with a real frame and inspected the output) |
 | Full Mac pipeline throughput (two hands, 638×1000 frames) | ✅ 24.0 fps in, 24.0 fps processed, 0 dropped, ~11 ms detection |
-| Coordinate math, view mapping, tracker, smoothing, controller | ✅ 52 unit tests |
+| Coordinate math, view mapping, tracker, smoothing, controller | ✅ unit tests |
+| **Wizard's Stand**: game rules, all four enemy types, targeting, scoring, lives, difficulty | ✅ unit tests (`test/games/`) |
+| Fist / open-palm classifier on **real Apple Vision landmarks** (open palms, fist, pointing, victory) | ✅ `test/input/pose_classifier_test.dart` with `test/fixtures/real_hand_landmarks.json` |
+| Cast gesture: one fist→open = one fireball, no repeat while open, re-arm on fist, no casts from dropouts | ✅ unit tests + app-level widget test |
+| Start Menu → Play → Game Over → Play Again / Start Menu, mouse and hand-dwell selection, leaderboard | ✅ widget tests (`test/app/app_flow_test.dart`) |
+| **Built release app, end to end with real frames**: native Vision → classifier → dwell-select PLAY → two fist→open transitions = exactly two fireballs → run ends → Game Over → score persisted and reloaded after restart | ✅ verified (`send_frames.py` streaming composited real hand photos into the running app) |
+| Full test suite | ✅ 125 Dart tests, `flutter analyze` clean, link self-test passing |
 | iPhone companion compiles against Meta DAT **1.0.1** (Debug and Release, `generic/platform=iOS`) | ✅ verified |
 | Companion ↔ Mac protocol (the companion's own `FrameSender` against the Mac's `FrameServer`) | ✅ verified (`tool/link_selftest.sh`) |
 | **Companion running on a physical iPhone with physical Ray-Ban Meta Gen 2 glasses** | ⚠️ **not verified.** No phone or glasses were available while building this. Needs the manual steps below. |
 | MockDeviceKit (iPhone-camera) mode on a physical iPhone | ⚠️ not verified (same reason) |
+| **Left-hand casting seen through the glasses' own camera** (first-person view, fingers up) | ⚠️ **not verified on glasses**. Validated on photos and the Mac webcam path only. See [limitations](#known-limitations-and-future-work). |
 
 The parts that need hardware use Meta's official API exactly as Meta's `CameraAccess` sample does
 (DAT 1.0.1). The first run on real hardware is still the remaining acceptance step. See
@@ -116,6 +131,10 @@ cd MetaRayzer && flutter pub get
 flutter run -d macos
 ```
 
+The app opens on the **Wizard's Stand** Start Menu. Press **PLAY** with the mouse to try it right
+away; without glasses, use **Simulated hand (dev)** or the Mac webcam source (see
+[Playing Wizard's Stand](#playing-wizards-stand)).
+
 or build a release app at `build/macos/Build/Products/Release/metarayzer.app`:
 
 ```bash
@@ -170,9 +189,168 @@ registration, device, permission and stream.
 
 ---
 
-## Using the app
+## Playing Wizard's Stand
 
-| Control (Mac side panel) | What it does |
+### Flow
+
+```
+Start Menu ──PLAY──▶ Wizard's Stand ──3 hits──▶ Game Over ──PLAY AGAIN──▶ Wizard's Stand
+    ▲                      │ Esc (quit, not recorded)        └──START MENU──▶ Start Menu
+    └──────────────────────┘
+```
+
+The **Start Menu** shows:
+- the title and the **PLAY** button
+- glasses and hand-detection status, with buttons for **Start glasses camera**, **Glasses & tracking setup** (the original tracking view) and **Simulated hand (dev)**
+- the menu-control mode, the casting-hand preference, and the **top 3** scores
+
+### Menu control (Start Menu → *Menu control*)
+
+| Mode | How |
+|---|---|
+| **Mouse & keyboard** (default) | Click buttons. Keyboard focus (Tab, then Enter/Space) uses standard Flutter button behavior; it isn't separately tested. Always available, even with the glasses disconnected. |
+| **Hand (hover to select)** | A glowing cursor follows your hand. Hold it over a button: a ring fills, and the button activates after the **hover time** (default **1.0 s**, adjustable 0.4–3 s with − / +). Moving off resets the timer, and one continuous hover activates a button only once. Mouse clicks keep working in this mode. |
+
+Only the central 60% × 70% of the camera view maps to the whole window, so small hand movements
+reach every button and the hand never needs to approach the frame edge (the glasses camera's view
+is narrow). Hand-dwell selection is off during gameplay, where the hand is used for casting.
+
+### Casting (in game)
+
+1. Raise your **left hand** into the glasses' view, **fingers pointing up** (like a "stop" sign, seen from behind).
+2. Close it into a **fist**: the orb at the bottom-left turns ice-blue, *"Ready"*.
+3. Snap it **open**: one fireball flies to the **nearest enemy inside the glowing rune line** (fireball range). The orange reticle shows who will be hit.
+4. Holding the palm open does nothing more (*"Close your fist to ready again"*). Close it to re-arm.
+
+The orb at the bottom-left shows the hand state: *looking for hand* (dashed), *make a fist*,
+*ready*, *casting* (orange charge ring as the hand opens), *spent*. Below it, **seen: fist/open/unknown**
+shows what the camera currently classifies. If no hand is seen for 2 s, a banner asks you to raise
+your hand. If the camera stream is unavailable, a banner says why. The game is never paused
+automatically. A small camera inset (bottom-right; Start Menu → *Camera view in game*) shows what the camera
+sees, so you can keep your hand in frame.
+
+**Keys:** `Esc` leaves a run (not recorded) or the setup screen.
+
+**Casting hand:** *Left* (default), *Right* or *Either*. The game follows one hand and sticks with it
+while it's visible. Vision's left/right label isn't fully reliable, so if no hand with the
+preferred label is visible, the largest visible hand is used.
+
+### Playing without glasses (development)
+
+| Option | What it is |
+|---|---|
+| **Simulated hand (dev)** (Start Menu) | Mouse = hand position, **hold the mouse button or Space/F = fist**, release = open palm. It goes through the same hand-input interface, recognizer and game as camera input, and is labeled **SIMULATED HAND (dev)** on screen. It is never re-enabled on launch. |
+| **Mac webcam** (Glasses & tracking setup → Source) | The real camera pipeline (Vision → classifier) using the Mac's camera. It's badged *DEV FALLBACK*. Turn on *Mirror preview* for a selfie view. |
+| `tool/send_frames.py` | Streams JPEGs into the running app over the real network link (labeled MOCK). |
+
+---
+
+## Game rules and tuning
+
+All numbers are in **`lib/src/games/wizard/wizard_config.dart`**. Nothing gameplay-related is
+hard-coded elsewhere.
+
+**World:** the player stands at the origin facing +z. Enemies spawn **32 units** away (lateral
+offset up to ±5) and walk straight toward the player. Every distance (fireball range, melee reach,
+archer stand-off) is the same Euclidean distance √(x² + z²).
+
+| Enemy | Movement | Attack | Score | Spawn weight (start → full difficulty) |
+|---|---|---|---|---|
+| **Troll** | Slow steady walk, 1.9 u/s | Raises its club for **0.9 s** (red "!" telegraph), then strikes at 2.4 u | **10** | 0.55 → 0.20 |
+| **Goblin** | Fast run with a slight weave, 5.2 u/s | Quick **0.45 s** wind-up at 1.9 u | **25** | 0.12 → 0.32 |
+| **Hopping Frog** | Moves only while airborne: 0.45 s hops, 0.55 s rests, random sideways shift per hop (avg 3.2 u/s) | 0.5 s wind-up at 1.9 u | **20** | 0.25 → 0.25 |
+| **Skeleton Archer** (the 4th type) | Slow walk (1.5 u/s); **stops at 14 u**, inside fireball range, so it can always be killed | Every **3.4 s**, a visible **bow draw (0.9 s)** then an arrow (10 u/s, ~1.4 s flight, red glow + warning ring) | **30** | 0.08 → 0.23 |
+
+- **Lives:** 3. A melee enemy strikes **once** and is then removed. Arrows hit once. After losing a
+  life, other hits within **0.6 s** still resolve their attackers but don't cost a second life, so
+  one swarm can't take two lives at once. At 0 lives the simulation freezes and the results screen opens.
+- **Fireballs:** range **20 u**, speed 48 u/s, damage 1. Enemies have 1 HP, but health, damage
+  and `incomingDamage` are modeled, so stronger enemies or spells only need config changes. A
+  fireball homes in on its target. Rapid casts skip enemies already doomed by a fireball in flight.
+  With no enemy in range, the fireball flies to the rune line and fizzles: no damage, no points.
+- **Scoring:** points are awarded once per enemy (guarded by `Enemy.scored`), only when a fireball
+  defeats it. An enemy killed during its wind-up never lands its hit.
+- **Difficulty:** smoothstep ramp over **180 s** of survival. It then stays at maximum.
+  - spawn interval: 2.6 s → 0.95 s
+  - simultaneous enemies: 3 → 7
+  - enemy speed: ×1.0 → ×1.35
+  - spawn mix shifts toward goblins and archers
+
+  There are no sudden jumps (tested), and the game is endless.
+
+**Leaderboard:** the top **3** completed runs, persisted locally with `shared_preferences`
+(NSUserDefaults in the app's sandbox container). It survives restarts and is shown on the Start
+Menu and Game Over screen, with this run highlighted. Equal scores from separate runs are kept
+separately; a new run must *beat* a score to push it out. Aborted runs (Esc) aren't recorded. Menu
+settings persist the same way.
+
+---
+
+## Game platform architecture
+
+```
+            ┌─────────────────────── camera pipeline (unchanged from v1) ───────────────────────┐
+glasses ──▶ │ iPhone companion → FrameServer → FramePipeline → Vision → TrackingController(tracker) │
+            └───────────────────────────────────────────┬───────────────────────────────────────┘
+                                                        │ TrackedHand (landmarks, smoothed center)
+lib/src/input/          CameraHandInput ── PoseClassifier (fist/open from landmarks)
+                        SimulatedHandInput (dev)            │
+                        HandInputHub  ── HandInputFrame {status, position, pose, confidence, frameId, simulated}
+                                 │                                      │
+lib/src/ui/dwell/        DwellScope + DwellSelector             lib/src/games/wizard/
+                         (menus: hover-to-select)               CastGestureRecognizer (fist→open state machine)
+                                                                WizardGame (pure-Dart simulation)
+lib/src/platform/        AppNavigator (routes) · MinigameDefinition/Host · RunResult      │
+lib/src/ui/menu/         StartMenu · GameOverScreen · fantasy theme             view/: projection, painter, effects
+lib/src/leaderboard/     Leaderboard (top 3, persisted)   lib/src/app/: AppServices, AppSettings, AppShell
+```
+
+- **One small input interface.** Games and menus see only `HandInputFrame`: tracking status (with a
+  reason when unavailable), a display-normalized position, the classified pose and its confidence,
+  a frame id, and a `simulated` flag. They never touch camera frames or the native layer.
+  `CameraHandInput` is the only adapter from the camera pipeline, and it reuses the v1 tracker
+  (sticky ids, smoothing, hold/expire) unchanged.
+- **Two independent consumers:**
+  - UI: `DwellScope`/`DwellSelector` use the position only.
+  - Game: `CastGestureRecognizer` uses status, pose and confidence only.
+
+  Changing one can't break the other.
+- **Pose classification** (`PoseClassifier`): for each finger (thumb ignored), it computes the ratio of the
+  wrist→tip distance to the wrist→knuckle distance. On real Vision output, extended fingers measure 1.65–2.07
+  and curled fingers 0.65–0.83. ≥3 extended and none curled = **open**; ≥3 curled and none
+  extended = **fist**; anything else (half-open, pointing, victory) = **unknown**. The classifier is
+  scale/rotation invariant and needs no extra model.
+- **Cast recognizer:**
+  - A pose counts only after **2 consecutive frames** at ≥0.45 confidence.
+  - A confirmed fist arms the spell; a confirmed open palm while armed casts **once**.
+  - Losing the hand never casts. Losing it for more than **350 ms** disarms.
+  - Status-only re-deliveries of a frame aren't double-counted.
+- **Game model** (`WizardGame`) is pure Dart: time only advances via `update(dt)` (clamped to 0.1 s),
+  with seeded randomness and events for effects. `Enemy` is an abstract base class:
+  - subclasses implement `move()` and optionally `attackUpdate()`
+  - a new enemy type = a subclass + an `EnemySpec` + one line in `createEnemy`
+- **Rendering**: one `CustomPainter` repainted from a `Ticker`. It does pseudo-3D projection
+  (`ArenaProjection`, the only world→screen math) and draws all art procedurally: no image assets and
+  no game engine. This version doesn't need Flame. Its sprites, collisions and camera aren't used,
+  and plain Flutter keeps the dependency list to one package.
+- **Navigation**: `AppNavigator` holds a single route. Leaving the game route disposes the game widget
+  and its ticker, so nothing runs behind the results screen. `finishRun` ignores stale or duplicate reports.
+- **Adding a minigame**: write a widget that takes a `MinigameHost` (hand input, settings,
+  `onFinished(RunResult)`, `onQuit`) and add a `MinigameDefinition` to `kMinigames` in `lib/main.dart`.
+  Leaderboards and the results screen work per game id. A **Game Select** screen only needs a new
+  `GameSelectRoute` and screen, with `playDefault()` pointed at it. The route list already anticipates it.
+
+New dependency: **`shared_preferences`** (official Flutter package; macOS supported; no setup).
+
+---
+
+## Using the tracking setup screen
+
+Start Menu → **Glasses & tracking setup** opens the original v1 view (live preview, dots, debug
+panel). `Esc` or **Back to menu** returns.
+
+
+| Control (setup screen side panel) | What it does |
 |---|---|
 | **Source**: Glasses (iPhone) / Mac webcam (dev) | Real path vs. **development fallback** (the Mac's own camera, clearly badged *DEV FALLBACK*). |
 | **Start glasses stream / Stop** | Sends `startStream` / `stopStream` to the companion. |
@@ -408,12 +586,20 @@ All thresholds are in `HandTrackerConfig`.
 
 | What | Command |
 |---|---|
-| Dart unit tests: coordinates, view mapping (incl. inverse for all fit/mirror/rotation combos), geometry, One Euro filter, tracker, controller with a fake native layer, event parsing | `flutter test` |
+| Dart tests: coordinates, view mapping (incl. inverse for all fit/mirror/rotation combos), geometry, One Euro filter, tracker, controller with a fake native layer, event parsing | `flutter test` |
+| Game tests: pose classifier (synthetic + real Vision landmarks), cast state machine, all game rules, dwell selection, leaderboard/settings persistence, navigation, camera-input adapter, full app flow widget tests | `flutter test test/games test/input test/ui test/platform test/app` |
 | Static analysis | `flutter analyze` |
 | Link integration: real Mac `FrameServer` + real companion `FrameSender` over loopback; Bonjour, framing, backpressure, commands, disconnect, reconnect, corrupt input | `tool/link_selftest.sh` |
 | Detector on images (+ `--annotate DIR` overlay PNGs, `--landmarks` raw output) | `tool/vision_probe.sh img.jpg` |
 | End-to-end Mac app without a phone (impersonates the companion) | `python3 tool/send_frames.py --loop img.jpg` |
 | Companion compile check | `xcodebuild -project companion_ios/MetaRayzerCompanion.xcodeproj -scheme MetaRayzerCompanion -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` |
+
+**Real-app gesture check without glasses:** composite a fist photo and an open-palm photo into
+504×896 frames, with the hand where you want the cursor. Switch to *Hand (hover to select)*, then
+stream e.g. 4 s of fist frames followed by 1 s of open-palm frames with `send_frames.py`. The app
+logs `[metarayzer] screen: PlayingRoute` and one `[metarayzer] fireball cast: …` per fist→open
+transition. Keep the MetaRayzer window **visible**: macOS pauses rendering (and with it the game and
+dwell timers) for hidden windows.
 
 The Mac app logs a stats line every 5 s (`[MetaRayzer] stats: … fps processed, … dropped, avg … ms
 detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app filtered by
@@ -438,11 +624,27 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
 | Webcam source shows nothing | System Settings > Privacy & Security > Camera > allow `metarayzer`. |
 | Mac fps drops when the window is hidden | By design: macOS pauses rendering for occluded windows, and the pipeline then drops frames instead of queueing. It recovers instantly when the window is visible. |
 | Companion signing errors about Hotspot / Wi-Fi Info | See [step 3.3](#3-configure-and-install-the-iphone-companion). |
+| Fireballs don't fire | Watch **seen:** under the orb. Fist must read `fist`, then `open`. Point your fingers **up**, not toward the camera (foreshortened fingers look curled), keep the hand inside the camera inset, and make a full fist (all four fingers). |
+| Fires while I don't mean to | Every fist→open fires once by design. Keep the hand closed (or out of view) between casts. |
+| Hand cursor never selects anything | *Menu control* must be *Hand*, and the status must say *Hand detected*. Hold still for the hover time; leave the button and come back to re-trigger it. Mouse clicks always work. |
+| Game or menu freezes when another window covers it | macOS pauses rendering for hidden windows. Keep the game window visible. |
+| Reset the leaderboard / settings | `defaults delete ~/Library/Containers/com.metarayzer.metarayzer/Data/Library/Preferences/com.metarayzer.metarayzer` |
 
 ---
 
 ## Known limitations and future work
 
+- **Gestures through the glasses' own camera are unverified.** The fist/open classifier is
+  validated on real Vision landmarks from photos and works end to end in the built app, but not yet
+  with the first-person view from the glasses:
+  - The glasses camera sits at the **left hinge**, which helps the left hand.
+  - Fingers pointing *at or away from* the camera are foreshortened and may read as a fist; cast
+    with fingers pointing **up**.
+  - Vision's left/right label for your own hands seen from behind is untested (*Either* is the fallback).
+  - Thresholds live in `PoseClassifierConfig` if real footage needs tuning.
+- **Gesture latency** is the camera path plus ~80 ms of confirmation (2 frames at 24 fps).
+  Lowering `CastGestureConfig.confirmFrames` to 1 makes it snappier, at the cost of more false casts.
+- **No audio** yet: feedback is visual (screen shake, red vignette, heart pulse, telegraphs).
 - **Hardware-dependent steps aren't verified yet.** The full phone + glasses path is implemented
   against DAT 1.0.1 and compiles, but hasn't been run on physical devices. See the
   [status table](#status-what-is-verified).
@@ -455,8 +657,10 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
   Store distribution of DAT apps depends on Meta's terms ([Meta Wearables Developer Terms](https://wearables.developer.meta.com/terms)).
 - **Android companion** is not implemented. The Mac side is protocol-compatible: an Android app using
   `meta-wearables-dat-android` only needs to implement the 4-message protocol.
-- **Future:** H.264/HEVC transport for higher resolutions, a Flutter `Texture`-based preview (zero-copy
-  `CVPixelBuffer`), 3D hand pose, gesture recognition, and running detection on the phone to save Wi-Fi bandwidth.
+- **Future:** Game Select screen and more minigames, spells and power-ups (enemy health and
+  spell damage are already modeled), sound, aiming with hand position or head orientation (DAT's
+  experimental Motion capability), H.264/HEVC transport, a `Texture`-based preview, and detection
+  on the phone.
 
 ---
 
@@ -482,10 +686,16 @@ frame source in `metarayzer_native` that feeds `FramePipeline.submit()`. That so
 ### Repository layout
 
 ```
-lib/                         Flutter app (Dart): state, geometry, tracking, UI
+lib/src/app/                 app services, settings, root shell (navigation + dwell + dev input)
+lib/src/input/               hand-input interface, camera adapter, pose classifier, simulated hand
+lib/src/games/wizard/        Wizard's Stand: config, enemies, game model, cast recognizer, view/
+lib/src/platform/            navigator, minigame definition/host, run results
+lib/src/ui/                  menus (fantasy theme), dwell selection, v1 tracking views
+lib/src/leaderboard/         persisted top-3 scores
+lib/src/{geometry,tracking}/ v1 coordinate math, tracker, One Euro filter
 packages/metarayzer_native/  macOS Swift plugin: frame link, pipeline, Vision detector, webcam
 companion_ios/               iPhone companion (Swift/SwiftUI, Meta DAT 1.0.1, XcodeGen project.yml)
-test/                        Dart unit tests
+test/                        Dart tests (fixtures/: real Vision landmarks)
 tool/                        send_frames.py, vision_probe.sh, link_selftest.sh
 macos/                       Flutter macOS runner (entitlements: network server/client, camera)
 ```
