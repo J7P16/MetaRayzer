@@ -142,7 +142,7 @@ class ArcherSpec {
   final ProjectileSpec arrow;
 }
 
-/// The base-kit shield: a 0.5 s projectile block triggered by a deliberate blocking pose.
+/// The base-kit shield: a 0.5 s projectile block triggered by a deliberate one-finger pose.
 ///
 /// It blocks only [ProjectileSpec.blockable] projectiles that reach [blockRadius] from the player
 /// within ±[halfAngle] of the shield direction (the player's aim/view direction). It never

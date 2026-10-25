@@ -360,7 +360,7 @@ class WizardGame implements EnemyContext {
 
   // ---- Shield ----
 
-  /// Reports the blocking pose (from the shield gesture recognizer). Returns true when this
+  /// Reports the shield pose (from the shield gesture recognizer). Returns true when this
   /// raised the shield. Holding the pose never retriggers or extends it.
   bool setShieldPose(bool held) {
     if (isOver) return false;

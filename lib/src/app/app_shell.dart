@@ -98,11 +98,13 @@ class _AppShellState extends State<AppShell> {
                 onHoverStart: s.audio.uiHover,
                 onActivated: s.audio.uiSelect,
                 child: Stack(fit: StackFit.expand, children: [
-                  // The live glasses view behind every menu screen (one shared stream; screen
-                  // transitions never restart it). Gameplay, the tutorial and the setup screen
-                  // show the camera themselves.
+                  // The game's camera view behind the menus that are about hand control: the
+                  // Start Menu and Settings. Opt-in per screen, so a running stream never shows
+                  // up behind other screens (results). One shared stream and decoder; screen
+                  // transitions never restart either. Gameplay, the tutorial and the setup
+                  // screen show the camera themselves.
                   MenuBackdropHost(
-                    allowed: route is! PlayingRoute && route is! TutorialRoute && route is! SetupRoute,
+                    allowed: route is StartMenuRoute || route is SettingsRoute,
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 350),
                       child: KeyedSubtree(key: ValueKey(_routeKey(route)), child: _screenFor(route)),

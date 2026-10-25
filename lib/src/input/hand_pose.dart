@@ -15,7 +15,7 @@ enum HandPose {
 }
 
 class PoseClassification {
-  const PoseClassification({required this.pose, required this.confidence, required this.openness, this.fingerExtension = const []});
+  const PoseClassification({required this.pose, required this.confidence, required this.openness, this.fingerExtension = const [], this.fingerStraightness = const []});
 
   static const none = PoseClassification(pose: HandPose.unknown, confidence: 0, openness: 0);
 
@@ -31,6 +31,11 @@ class PoseClassification {
   /// Per finger (index, middle, ring, little), 0..1; -1 when the finger couldn't be measured.
   final List<double> fingerExtension;
 
+  /// Per finger (index, middle, ring, little), 0 (sharply bent at the middle joint) .. 1
+  /// (straight), from the joint angles at the PIP and DIP; -1 when not measurable. A second,
+  /// independent measurement next to [fingerExtension] (used by the shield's one-finger pose).
+  final List<double> fingerStraightness;
+
   @override
   String toString() => 'PoseClassification(${pose.name}, conf=${confidence.toStringAsFixed(2)}, open=${openness.toStringAsFixed(2)})';
 }
@@ -44,6 +49,8 @@ class PoseClassifierConfig {
     this.fingerCurledAt = 0.35,
     this.minExtendedForOpen = 3,
     this.minCurledForFist = 3,
+    this.bentAngle = 60 * math.pi / 180,
+    this.straightAngle = 160 * math.pi / 180,
   });
 
   final double minJointConfidence;
@@ -62,6 +69,12 @@ class PoseClassifierConfig {
 
   /// Fist: at least this many curled and none extended.
   final int minCurledForFist;
+
+  /// Joint angle (radians, 180° = straight) at which a finger counts as fully bent (0) and fully
+  /// straight (1) for [PoseClassification.fingerStraightness]. Real Apple Vision landmarks
+  /// (test/fixtures): extended fingers 170–179°, curled fingers 1–50° at the PIP.
+  final double bentAngle;
+  final double straightAngle;
 }
 
 /// Landmark-based fist / open-palm classifier (no extra model).
@@ -79,7 +92,7 @@ class PoseClassifier {
 
   final PoseClassifierConfig config;
 
-  static const _fingers = [(5, 8), (9, 12), (13, 16), (17, 20)]; // (MCP, tip)
+  static const _fingers = [(5, 8), (9, 12), (13, 16), (17, 20)]; // (MCP, tip); PIP = MCP + 1, DIP = MCP + 2
   static const _wrist = 0;
 
   /// [aspect] = frame width / height, so distances are measured in square pixels.
@@ -111,9 +124,32 @@ class PoseClassifier {
         ..add(c(tip));
     }
 
+    // Straightness: the sharper of the two finger-joint angles (MCP-PIP-DIP and PIP-DIP-tip).
+    // Scale- and in-plane-rotation invariant like the ratio, and it does not depend on the wrist.
+    double angle(int a, int b, int c) {
+      final (ax, ay, cx, cy) = (x(a) - x(b), y(a) - y(b), x(c) - x(b), y(c) - y(b));
+      final la = math.sqrt(ax * ax + ay * ay), lc = math.sqrt(cx * cx + cy * cy);
+      if (la < 1e-9 || lc < 1e-9) return -1;
+      return math.acos(((ax * cx + ay * cy) / (la * lc)).clamp(-1.0, 1.0));
+    }
+
+    final straightness = <double>[];
+    for (final (mcp, tip) in _fingers) {
+      if ([mcp, mcp + 1, mcp + 2, tip].any((j) => c(j) < config.minJointConfidence)) {
+        straightness.add(-1);
+        continue;
+      }
+      final pip = angle(mcp, mcp + 1, mcp + 2), dip = angle(mcp + 1, mcp + 2, tip);
+      if (pip < 0 || dip < 0) {
+        straightness.add(-1);
+        continue;
+      }
+      straightness.add(((math.min(pip, dip) - config.bentAngle) / (config.straightAngle - config.bentAngle)).clamp(0.0, 1.0));
+    }
+
     final measured = extensions.where((e) => e >= 0).toList();
     if (measured.length < 3) {
-      return PoseClassification(pose: HandPose.unknown, confidence: 0, openness: 0, fingerExtension: extensions);
+      return PoseClassification(pose: HandPose.unknown, confidence: 0, openness: 0, fingerExtension: extensions, fingerStraightness: straightness);
     }
     final openness = measured.reduce((a, b) => a + b) / measured.length;
     final extended = measured.where((e) => e >= config.fingerExtendedAt).length;
@@ -139,6 +175,6 @@ class PoseClassifier {
     } else {
       pose = HandPose.unknown;
     }
-    return PoseClassification(pose: pose, confidence: confidence, openness: openness, fingerExtension: extensions);
+    return PoseClassification(pose: pose, confidence: confidence, openness: openness, fingerExtension: extensions, fingerStraightness: straightness);
   }
 }

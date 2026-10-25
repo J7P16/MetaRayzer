@@ -1,173 +1,248 @@
 import 'dart:math' as math;
-import 'dart:ui';
 
 import '../../input/hand_input.dart';
+import '../../input/hand_pose.dart';
 
-/// Thresholds for the shield's blocking pose. Every value is a starting point validated on
-/// synthetic and simulated input only; tune them here after testing with the glasses camera.
+/// Thresholds for the shield's one-finger pose. Values were chosen from the real Apple Vision
+/// landmarks in test/fixtures (pointing_up.jpg: index straight at 175–179° with a tip 2.0× the
+/// knuckle distance from the wrist; the other fingers bent to 26–50° at the middle joint and
+/// folded to 0.65–0.75×) and checked against synthetic and simulated input only. Tune them here
+/// after testing with the glasses camera.
 ///
-/// The pose: the forearm raised upright close in front of the face, so the hand shows up in the
-/// camera as a large, upright, vertical shape in the middle of the view. It is measured from
-/// tracked hand geometry ([HandShape]), not from a single landmark:
-/// - coverage: how much of the shield region's HEIGHT the hand spans, counted only while the
-///   hand overlaps the region horizontally and its center lies inside it. A vertical line through
-///   the region covers it; the hand does not have to fill the camera image.
-/// - closeness: the wrist → middle-knuckle length relative to the frame height.
-/// - orientation: the hand axis within [maxTilt] of vertical (fingers up).
-/// - extension: the hand reaches well above its knuckles ([minReach] × palm length), which
-///   rejects a fist. (Height/width does not work: a real upright open palm with a spread thumb is
-///   about as wide as it is tall — measured on the real Vision landmarks in test/fixtures.)
-/// Separate, looser exit thresholds (hysteresis) keep tracking noise from toggling the pose.
+/// The pose: the index finger held up (extended), middle, ring and little fingers curled. Each
+/// finger is measured from tracked joint landmarks by the [PoseClassifier] in two independent
+/// ways, both invariant to hand size, distance and in-plane rotation:
+/// - extension: wrist → fingertip distance relative to wrist → knuckle;
+/// - straightness: the joint angles at the finger's middle (PIP) and end (DIP) joints.
+/// Their mean is the finger's "extended" score; 1 minus it is its "curled" score. The thumb is
+/// ignored (Vision's thumb joints are unreliable), and the hand may be anywhere in view: the
+/// shield blocks along the aim direction, not at the hand's screen position.
+///
+/// Separate, looser exit thresholds (hysteresis) and exponential smoothing keep landmark noise
+/// from toggling the pose.
 class ShieldGestureConfig {
   const ShieldGestureConfig({
-    this.region = const Rect.fromLTRB(0.30, 0.15, 0.70, 0.85),
-    this.minCoverage = 0.45,
-    this.exitCoverage = 0.30,
-    this.minPalmLength = 0.13,
-    this.exitPalmLength = 0.10,
-    this.maxTilt = 0.61, // 35°
-    this.exitTilt = 0.79, // 45°
-    this.minReach = 1.5,
+    this.enterIndex = 0.75,
+    this.exitIndex = 0.5,
+    this.enterCurled = 0.7,
+    this.exitCurled = 0.45,
     this.minConfidence = 0.45,
-    this.confirmFrames = 2,
+    this.confirmFrames = 3,
+    this.recognizeMs = 80,
     this.releaseFrames = 2,
-    this.dropoutReleaseMs = 250,
+    this.dropoutReleaseMs = 300,
     this.smoothing = 0.5,
   });
 
-  /// The shield-blocking region of the displayed camera view (normalized).
-  final Rect region;
+  /// Index finger "extended" score (0..1) needed to enter / stay in the pose.
+  final double enterIndex;
+  final double exitIndex;
 
-  /// Fraction of [region]'s height the hand must span to enter / stay in the pose.
-  final double minCoverage;
-  final double exitCoverage;
-  final double minPalmLength;
-  final double exitPalmLength;
-  final double maxTilt;
-  final double exitTilt;
-  final double minReach;
+  /// "Curled" score (0..1) each of the middle, ring and little fingers needs to enter / stay.
+  final double enterCurled;
+  final double exitCurled;
 
-  /// Below this joint confidence a frame is ignored (neither entering nor releasing).
+  /// Below this classification confidence a frame is ignored: it never enters the pose, and
+  /// never counts as a release either.
   final double minConfidence;
 
-  /// New frames in a row that must meet the entry thresholds before the pose counts.
+  /// The pose must be seen in at least this many new frames in a row ...
   final int confirmFrames;
 
-  /// New frames in a row failing the exit thresholds before the pose counts as released.
+  /// ... spanning at least this long (ms) before it is recognized (the recognition interval).
+  final double recognizeMs;
+
+  /// New confident frames in a row failing the exit thresholds before the pose counts as
+  /// released.
   final int releaseFrames;
 
   /// A hand missing for longer than this counts as released.
   final double dropoutReleaseMs;
 
-  /// Exponential smoothing weight of the newest coverage sample (1 = no smoothing).
+  /// Exponential smoothing weight of the newest finger scores (1 = no smoothing).
   final double smoothing;
 }
 
-/// One frame's blocking-pose measurements (for tests and the debug readout).
-class BlockPoseMetrics {
-  const BlockPoseMetrics({required this.coverage, required this.palmLength, required this.tilt, required this.reach, required this.centered});
-  final double coverage;
-  final double palmLength;
-  final double tilt;
-  final double reach;
+/// One frame's (smoothed) finger measurements for the one-finger pose, for tests and debugging.
+class OneFingerMetrics {
+  const OneFingerMetrics({required this.index, required this.curled, required this.confidence});
 
-  /// The hand's center lies horizontally inside the region.
-  final bool centered;
+  /// Index finger "extended" score, 0..1.
+  final double index;
 
-  static BlockPoseMetrics measure(HandShape shape, Rect region) {
-    final b = shape.bounds;
-    final overlapsX = b.right >= region.left && b.left <= region.right;
-    final centered = b.center.dx >= region.left && b.center.dx <= region.right;
-    final spanned = math.max(0.0, math.min(b.bottom, region.bottom) - math.max(b.top, region.top));
-    final coverage = overlapsX && centered ? spanned / region.height : 0.0;
-    return BlockPoseMetrics(coverage: coverage, palmLength: shape.palmLength, tilt: shape.tilt, reach: shape.verticalReach, centered: centered);
+  /// "Curled" scores of the middle, ring and little fingers, 0..1.
+  final List<double> curled;
+
+  /// Classification (joint × hand) confidence of the frame.
+  final double confidence;
+
+  /// The least-curled of the other three fingers.
+  double get minCurled => curled.reduce(math.min);
+
+  /// Raw (unsmoothed) scores of one classification, or null when any of the four fingers could
+  /// not be measured (missing or low-confidence joints): such a frame is ambiguous.
+  static OneFingerMetrics? measure(PoseClassification c) {
+    final ext = c.fingerExtension, straight = c.fingerStraightness;
+    if (ext.length < 4 || straight.length < 4) return null;
+    final extended = <double>[];
+    for (var f = 0; f < 4; f++) {
+      if (ext[f] < 0 || straight[f] < 0) return null;
+      extended.add((ext[f] + straight[f]) / 2);
+    }
+    return OneFingerMetrics(index: extended[0], curled: [for (final e in extended.skip(1)) 1 - e], confidence: c.confidence);
   }
 }
 
-/// Recognizes the deliberate blocking pose with smoothing, hysteresis and short temporal
-/// validation. [held] is the debounced pose; [update] returns true only on the frame the pose
+/// Where the one-finger recognizer is. Together with the shield's own state machine this gives
+/// the full activation cycle:
+///
+///   idle ──pose seen──▶ recognizing ──stable for the recognition interval──▶ held
+///     ▲                     │ pose lost / ambiguous / low confidence            │ (activation)
+///     └─────────────────────┘                                                   ▼
+///     └────────────── release recognized ◀── releasing ◀── confident non-pose frames
+///
+/// [ShieldGestureRecognizer.update] reports the activation once, on entering [held]. The shield
+/// ([Shield]) then stays active for exactly its window and waits in `recharging` until this
+/// recognizer has recognized the release ("awaiting release").
+enum ShieldGesturePhase { idle, recognizing, held, releasing }
+
+/// Recognizes the shield's one-finger pose with smoothing, hysteresis and a short recognition
+/// interval. [held] is the debounced pose; [update] returns true only on the frame the pose
 /// becomes held (the shield's activation request). The shield itself enforces the 0.5 s window
 /// and the release/re-arm rule; this class only says whether the pose is held.
 ///
-/// Fails safe: low-confidence frames and short dropouts change nothing (they never activate);
-/// a dropout longer than [ShieldGestureConfig.dropoutReleaseMs] releases the pose.
+/// Fails safe: low-confidence or ambiguous frames and short dropouts never activate and never
+/// count as a release; a dropout longer than [ShieldGestureConfig.dropoutReleaseMs] releases.
 class ShieldGestureRecognizer {
   ShieldGestureRecognizer({this.config = const ShieldGestureConfig()});
 
   final ShieldGestureConfig config;
 
-  bool _held = false;
+  ShieldGesturePhase _phase = ShieldGesturePhase.idle;
   int _enterCount = 0;
+  double? _enterStartMs;
   int _exitCount = 0;
   int _lastFrameId = -1;
-  double? _coverage;
+  int? _handId;
+  double? _index;
+  List<double>? _curled;
   double? _lostSinceMs;
-  BlockPoseMetrics? _metrics;
+  double _lastMs = 0;
+  OneFingerMetrics? _metrics;
 
-  bool get held => _held;
-  BlockPoseMetrics? get metrics => _metrics;
+  ShieldGesturePhase get phase => _phase;
 
-  /// 0..1 progress toward the entry thresholds (for a "raise higher" hint).
-  double get readiness => _held ? 1 : ((_coverage ?? 0) / config.minCoverage).clamp(0.0, 1.0);
+  /// The pose is recognized and not yet released (also while [ShieldGesturePhase.releasing]).
+  bool get held => _phase == ShieldGesturePhase.held || _phase == ShieldGesturePhase.releasing;
 
-  /// Whether the current frame looks like the pose (before temporal confirmation). The game uses
-  /// it to keep a raised blocking hand from also firing a cast.
-  bool candidate = false;
+  /// The latest smoothed measurements (null before the first measurable frame).
+  OneFingerMetrics? get metrics => _metrics;
+
+  /// 0..1 progress toward recognition (for the HUD's readiness pip).
+  double get readiness {
+    if (held) return 1;
+    final m = _metrics;
+    if (m == null) return 0;
+    if (_phase == ShieldGesturePhase.recognizing) {
+      final frames = _enterCount / config.confirmFrames;
+      final time = config.recognizeMs <= 0 ? 1.0 : ((_lastMs - (_enterStartMs ?? _lastMs)) / config.recognizeMs);
+      return 0.6 + 0.4 * math.min(frames, time).clamp(0.0, 1.0);
+    }
+    final closeness = math.min(m.index / config.enterIndex, m.minCurled / config.enterCurled);
+    return 0.6 * closeness.clamp(0.0, 1.0);
+  }
 
   void reset() {
-    _held = false;
-    _enterCount = 0;
+    _phase = ShieldGesturePhase.idle;
     _exitCount = 0;
-    _coverage = null;
+    _handId = null;
     _lostSinceMs = null;
+    _resetMeasurement();
+  }
+
+  void _resetMeasurement() {
+    _enterCount = 0;
+    _enterStartMs = null;
+    _index = null;
+    _curled = null;
     _metrics = null;
-    candidate = false;
   }
 
   bool update(HandInputFrame frame) {
-    final shape = frame.shape;
-    if (frame.status != HandTrackingStatus.tracking || shape == null) {
-      candidate = false;
-      _enterCount = 0;
+    _lastMs = frame.timestampMs;
+    if (frame.status != HandTrackingStatus.tracking) {
       _lostSinceMs ??= frame.timestampMs;
-      if (_held && frame.timestampMs - _lostSinceMs! > config.dropoutReleaseMs) _release();
+      final lostFor = frame.timestampMs - _lostSinceMs!;
+      if (!held) {
+        _phase = ShieldGesturePhase.idle; // never carry a half-recognized pose across a gap
+        _enterCount = 0;
+        _enterStartMs = null;
+      }
+      if (lostFor > config.dropoutReleaseMs) {
+        if (held) _release();
+        _resetMeasurement();
+      }
       return false;
     }
     _lostSinceMs = null;
     if (frame.frameId == _lastFrameId) return false; // status-only re-delivery
     _lastFrameId = frame.frameId;
-    if (shape.confidence < config.minConfidence) {
-      candidate = false;
+    if (frame.handId != _handId) {
+      // A different hand: its scores start fresh (a held pose still needs a recognized release).
+      _handId = frame.handId;
+      _resetMeasurement();
+    }
+
+    final raw = frame.classification.confidence >= config.minConfidence ? OneFingerMetrics.measure(frame.classification) : null;
+    if (raw == null) {
+      // Ambiguous or low confidence: no evidence either way.
+      if (!held) {
+        _phase = ShieldGesturePhase.idle;
+        _enterCount = 0;
+        _enterStartMs = null;
+      }
       return false;
     }
 
-    final m = BlockPoseMetrics.measure(shape, config.region);
+    final a = config.smoothing;
+    final previousCurled = _curled;
+    _index = _index == null ? raw.index : _index! + (raw.index - _index!) * a;
+    _curled = [for (var i = 0; i < 3; i++) previousCurled == null ? raw.curled[i] : previousCurled[i] + (raw.curled[i] - previousCurled[i]) * a];
+    final m = OneFingerMetrics(index: _index!, curled: _curled!, confidence: raw.confidence);
     _metrics = m;
-    final previous = _coverage;
-    _coverage = previous == null ? m.coverage : previous + (m.coverage - previous) * config.smoothing;
-    final coverage = _coverage!;
 
-    final entering = coverage >= config.minCoverage && m.palmLength >= config.minPalmLength && m.tilt <= config.maxTilt && m.reach >= config.minReach;
-    final holding = coverage >= config.exitCoverage && m.palmLength >= config.exitPalmLength && m.tilt <= config.exitTilt;
-    candidate = entering || (_held && holding);
+    final entering = m.index >= config.enterIndex && m.minCurled >= config.enterCurled;
+    final holding = m.index >= config.exitIndex && m.minCurled >= config.exitCurled;
 
-    if (_held) {
+    if (held) {
       _exitCount = holding ? 0 : _exitCount + 1;
+      _phase = holding ? ShieldGesturePhase.held : ShieldGesturePhase.releasing;
       if (_exitCount >= config.releaseFrames) _release();
       return false;
     }
-    _enterCount = entering ? _enterCount + 1 : 0;
-    if (_enterCount >= config.confirmFrames) {
-      _held = true;
+    if (!entering) {
+      _phase = ShieldGesturePhase.idle;
+      _enterCount = 0;
+      _enterStartMs = null;
+      return false;
+    }
+    _phase = ShieldGesturePhase.recognizing;
+    _enterCount++;
+    _enterStartMs ??= frame.timestampMs;
+    if (_enterCount >= config.confirmFrames && frame.timestampMs - _enterStartMs! >= config.recognizeMs) {
+      _phase = ShieldGesturePhase.held;
       _exitCount = 0;
+      _enterCount = 0;
+      _enterStartMs = null;
       return true;
     }
     return false;
   }
 
   void _release() {
-    _held = false;
+    _phase = ShieldGesturePhase.idle;
     _enterCount = 0;
+    _enterStartMs = null;
     _exitCount = 0;
   }
 }

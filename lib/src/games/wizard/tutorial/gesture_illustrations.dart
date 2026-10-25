@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 /// Looping, procedurally drawn illustrations of the real controls (no image assets):
 /// - [GestureKind.look]: glasses turning left and right (head movement turns the view);
 /// - [GestureKind.cast]: the LEFT hand, fingers up, closing into a fist and snapping open;
-/// - [GestureKind.shield]: the forearm raised upright close in front of the face, a short shield
-///   flash meeting an incoming arrow.
+/// - [GestureKind.shield]: the hand comes up and holds up one finger (index up, the others
+///   curled), a short shield flash meeting an incoming arrow.
 /// Shared visual language: gold = the player's hand/head, cyan = shield, orange = fire.
 enum GestureKind { look, cast, shield }
 
@@ -123,7 +123,8 @@ class _IllustrationPainter extends CustomPainter {
   }
 
   /// A simple back-of-hand drawing: palm, four fingers (curling with [closed]) and a thumb.
-  void _hand(Canvas canvas, Offset wrist, double s, double closed, {bool mirrorLeft = false}) {
+  /// [point] curls every finger except the index (the one next to the thumb).
+  void _hand(Canvas canvas, Offset wrist, double s, double closed, {bool mirrorLeft = false, double point = 0}) {
     final skin = Paint()..color = _skin;
     final outline = Paint()
       ..style = PaintingStyle.stroke
@@ -131,9 +132,11 @@ class _IllustrationPainter extends CustomPainter {
       ..color = const Color(0xFF6A4A3A);
     final palm = Rect.fromCenter(center: wrist - Offset(0, s * 0.32), width: s * 0.62, height: s * 0.52);
     canvas.drawRect(Rect.fromCenter(center: wrist + Offset(0, s * 0.12), width: s * 0.4, height: s * 0.3), skin); // wrist
+    final index = mirrorLeft ? 3 : 0;
     for (var i = 0; i < 4; i++) {
       final x = palm.left + palm.width * (0.14 + i * 0.24);
-      final len = s * [0.42, 0.48, 0.45, 0.36][i] * (1 - 0.72 * closed);
+      final curl = i == index ? closed : math.max(closed, point);
+      final len = s * (i == index ? math.max([0.42, 0.48, 0.45, 0.36][i], 0.46 * point) : [0.42, 0.48, 0.45, 0.36][i]) * (1 - 0.72 * curl);
       final finger = RRect.fromRectAndRadius(Rect.fromLTWH(x - s * 0.06, palm.top - len, s * 0.12, len + s * 0.06), Radius.circular(s * 0.06));
       canvas.drawRRect(finger, skin);
       canvas.drawRRect(finger, outline);
@@ -141,7 +144,7 @@ class _IllustrationPainter extends CustomPainter {
     final palmR = RRect.fromRectAndRadius(palm, Radius.circular(s * 0.12));
     canvas.drawRRect(palmR, skin);
     canvas.drawRRect(palmR, outline);
-    if (closed > 0.5) {
+    if (math.max(closed, point) > 0.5) {
       // Knuckle line of a fist.
       canvas.drawLine(Offset(palm.left + s * 0.06, palm.top + s * 0.08), Offset(palm.right - s * 0.06, palm.top + s * 0.08), outline);
     }
@@ -155,9 +158,8 @@ class _IllustrationPainter extends CustomPainter {
       ..color = _skin);
   }
 
-  /// Front view of the player: the forearm comes up close in front of the face as an upright
-  /// "vertical line", the shield flashes for a moment, and an arrow arriving at that moment is
-  /// deflected.
+  /// Front view of the player: the hand comes up and holds up one finger (index up, the others
+  /// curled), the shield flashes for a moment, and an arrow arriving at that moment is deflected.
   void _shield(Canvas canvas, Size size) {
     final face = Offset(size.width * 0.5, size.height * 0.42);
     // Head with glasses.
@@ -171,7 +173,7 @@ class _IllustrationPainter extends CustomPainter {
       ..strokeWidth = size.width * 0.13
       ..strokeCap = StrokeCap.round
       ..color = const Color(0xFF3B2266));
-    _hand(canvas, wrist, size.width * 0.38, 0, mirrorLeft: true);
+    _hand(canvas, wrist, size.width * 0.38, 0, mirrorLeft: true, point: up);
     // Arrow flying in from the distance; it meets the shield during the active window.
     final arrowT = ((t - 0.2) / 0.3).clamp(0.0, 1.0);
     final shieldOn = t > 0.38 && t < 0.58;
@@ -198,7 +200,7 @@ class _IllustrationPainter extends CustomPainter {
         ..strokeWidth = 3
         ..color = Colors.white.withValues(alpha: 1 - k));
     }
-    _caption(canvas, size, shieldOn ? 'SHIELD · 0.5 s' : (up > 0.9 ? 'raise · hold still' : ''), _cyan);
+    _caption(canvas, size, shieldOn ? 'SHIELD · 0.5 s' : (up > 0.9 ? 'one finger up' : ''), _cyan);
   }
 
   void _caption(Canvas canvas, Size size, String text, Color color) {

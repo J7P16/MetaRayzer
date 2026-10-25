@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'wizard_config.dart';
 
 enum ShieldState {
-  /// Can be raised by the next blocking pose.
+  /// Can be raised by the next shield pose.
   ready,
 
   /// Blocking projectiles for [ShieldSpec.activeSeconds].
@@ -22,6 +22,11 @@ enum ShieldState {
 /// - A held pose never extends or retriggers the window (activation needs a released pose).
 /// - Releasing the pose during the window does not end it early; the block lasts exactly
 ///   [ShieldSpec.activeSeconds].
+///
+/// With the gesture recognizer (`ShieldGestureRecognizer`) the whole cycle is
+/// Idle (recognizer idle, shield ready) → Recognizing (recognizer) → Active (shield, 0.5 s) →
+/// Awaiting Release (shield recharging until the recognizer reports the release) → Idle.
+/// Neither side can keep the shield up: the window is timed here, whatever the input does.
 class Shield {
   Shield(this.spec);
 
@@ -48,7 +53,7 @@ class Shield {
   /// 1 at activation → 0 at expiry.
   double get activeFraction => spec.activeSeconds <= 0 ? 0 : remaining / spec.activeSeconds;
 
-  /// Reports whether the blocking pose is held right now. Returns true when this call activated
+  /// Reports whether the shield pose is held right now. Returns true when this call activated
   /// the shield.
   bool setPose(bool held) {
     final rising = held && !_poseHeld;

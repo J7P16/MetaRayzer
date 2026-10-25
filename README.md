@@ -4,13 +4,13 @@ A **Flutter macOS** hand-gesture game platform driven by the camera of **Ray-Ban
 glasses. Its first minigame is **Wizard's Stand**, a first-person wizard shooter. You hold a staff
 in your left hand: close the hand into a fist to ready a spell, then snap it open to cast. The
 spells are a homing **Fireball** and, once unlocked, an aimed **Chain Lightning**. A **Shield** is
-always available: raise your forearm upright in front of your face to block arrows and bolts for
-0.5 s.
+always available: hold up one finger (index up, the other fingers curled) to block arrows and
+bolts for 0.5 s.
 
 Version 4 adds:
 - a fix for **glasses audio** through the iPhone, with *requested* vs. *confirmed* output shown
   separately
-- the live **glasses camera feed behind every menu**
+- the live **glasses camera feed behind the Start Menu and Settings**
 - polished **enemy art** and **health bars** on every enemy
 - the base-kit **Shield** and a gesture recognizer for it
 - a **Skeleton Archer** that repositions, settles, telegraphs, then fires one aimed arrow
@@ -93,9 +93,12 @@ and a `swiftc -typecheck` of the Mac `AudioController`).
 - Projectiles: blocked vs. unblocked damage, block wins over hit, too-early shield, out-of-arc
   arrows not blocked, melee never blocked, fixed velocity after launch, misses removed, each
   resolved once.
-- Shield gesture metrics on **real Apple Vision landmarks** (upright close palm accepted; far
-  hand, sideways hand, fist and off-center hand rejected; mirroring), plus the temporal
-  recognizer (confirmation, noise, re-delivery, low confidence, dropout) (`test/input/shield_gesture_test.dart`).
+- Shield one-finger gesture on **real Apple Vision landmarks** (the pointing hand accepted at
+  any size, in-plane rotation and position; open palm, fist and V sign rejected; synthetic
+  index+little, middle-only and half-curled hands rejected), plus the temporal recognizer
+  (recognition interval, flicker, noise during a hold, release and re-arm, re-delivery, low
+  confidence, ambiguous joints, dropout) and recognizer → shield → projectile block
+  (`test/input/shield_gesture_test.dart`).
 - Skeleton cycle: telegraph always precedes exactly one arrow, phases repeat, no skipped
   telegraph at the longest frame step, nothing fired after death, reaction-time budget.
 - Reduced auto-aim: a statistical miss rate that stays above zero at full difficulty, with a
@@ -109,9 +112,11 @@ and a `swiftc -typecheck` of the Mac `AudioController`).
   tutorial; v3 saves keep it; it persists across simulated restarts.
 - Tutorial: the step logic; a full widget run with simulated input (look, cast, timed shield
   block); and that score, lives, leaderboard and progression stay untouched; exit and replay.
-- Menu camera feed: shown on the Start Menu and Settings with one shared preview, no stream
-  commands sent by navigation, stalled feed shown as *paused*, setting turns it off; mouse
-  clicks work over it.
+- Menu camera feed: the same `CameraFeedView` as the in-game inset (same frames, shared decoder,
+  overlays); shown only on the Start Menu and Settings, not behind other screens when the stream
+  starts; one decoder subscription across menu ↔ game; no stream commands sent by navigation;
+  stalled feed shown as *paused*, stopped/lost stream hidden, recovery after reconnect; mouse
+  clicks and hand dwell work over it (`test/ui/camera_feed_test.dart`, simulated native events).
 - Audio settings: master × channel volumes, disabled channels, music dedup, persistence.
   Route verification: glasses confirmed only from an OS-reported route.
 - Offline audio engine (`tool/audio_probe.sh`): all 34 sounds, three seamless music loops, music
@@ -129,8 +134,10 @@ and a `swiftc -typecheck` of the Mac `AudioController`).
   Vision landmarks from photos and on simulated input, not on first-person glasses footage. Tune
   them in `ShieldGestureConfig`.
 - Music and all sounds heard through the glasses (either route).
-- Live camera behind the menus with real glasses frames. It is the same `CameraPreview` widget and
-  controller as the gameplay inset, but it hasn't been run with the real stream.
+- Live camera behind the menus with real glasses frames. It is the same `CameraFeedView` widget,
+  controller and decoder as the gameplay inset, but it hasn't been run with the real stream.
+- The one-finger shield pose with real glasses footage (thresholds come from Vision landmarks on
+  still photos).
 
 **Partially implemented:**
 - *Avoiding attacks by movement.* The game tracks head **orientation** only (DAT Motion has no
@@ -320,16 +327,22 @@ Start Menu ──PLAY──▶ Wizard's Stand ──3 hits──▶ Game Over �
     └──Settings / Glasses & tracking setup (Esc or Back returns)
 ```
 
-**Camera feed behind the menus (v4).** While the glasses stream is live, every navigation
-screen shows the live glasses view behind its panels:
-- Start Menu, Settings, Game Over and the tutorial's first and last pages
+**Camera feed behind the menus (v4).** Connecting the glasses or starting the stream only makes
+the feed *available*. Screens opt in to showing it:
+- Start Menu and Settings (behind their panels), and the tutorial's first and last pages
+- not Game Over or any other screen, even while the stream runs
 - dimmed so text stays readable, with the hand-dot overlay
 - a dashed outline of the **hand-pointer area**, the camera region that maps to the whole window
   for the hand cursor and the staff
 
-It uses the same `CameraPreview`, controller, fit, mirroring and rotation as the in-game inset, so
-coordinates match gameplay. It is one widget under all menu screens (`MenuBackdropHost` in
-`AppShell`), so navigating never creates a second preview or restarts the stream.
+It is the in-game view itself: `CameraFeedView` (in `camera_preview.dart`) renders both the menu
+backdrop and the in-game inset with the same controller, frames, fit, mirroring, rotation, hand
+overlay and pointer area, and one visibility rule (`cameraFeedState`): *live* while frames
+arrive, *paused* (dimmed, labeled, never as live) when they stall, hidden when the stream is
+stopped, the companion disconnects or simulated input drives the hand. The menu only adds a
+readability tint and a caption. Frames are decoded once per frame by a `SharedFrameDecoder`
+shared by every visible preview, so switching between menus and gameplay hands over the current
+picture instead of starting a new decoder, and navigation never sends stream commands.
 
 States:
 - A stalled stream is dimmed and labeled *STREAM PAUSED · showing the last frame*.
@@ -399,35 +412,40 @@ Labels under the staff show the gesture state and **seen: fist/open/victory/unkn
 
 ### The shield (base kit, v4)
 
-Raise your forearm **upright, close in front of your face** ("a vertical line" in the camera). The
-shield then blocks **projectiles only** (skeleton arrows, boss bolts) for **0.5 s**.
-- Holding the pose does **not** extend or retrigger it. Lower your hand and raise it again for
-  the next one (re-arm takes 0.15 s).
+Hold up **one finger**: the index finger extended, the middle, ring and little fingers curled.
+The shield then blocks **projectiles only** (skeleton arrows, boss bolts) for **0.5 s**.
+- Holding the pose does **not** extend or retrigger it. Relax the finger (or open the hand) and
+  hold it up again for the next one (re-arm takes 0.15 s).
 - It never protects against melee blows or contact damage.
 - It covers a ±35° arc around where you aim and look, so face the threat.
-- Raising it cancels a readied spell, so a blocking hand never casts by accident.
+- Raising it cancels a readied spell, so a shield hand never casts by accident. The pose is
+  neither fist nor open, so it can't arm or fire a spell while being recognized either.
 - Feedback: a cyan shield wall drawn exactly where it blocks, with its remaining time along the
-  bottom edge; a flash and a glassy clang on each block; a status chip (*ready / up / lower your
-  hand to re-arm*) with a pip that fills as your hand approaches the pose; and an
+  bottom edge; a flash and a glassy clang on each block; a status chip (*ready / up / relax your
+  finger to re-arm*) with a pip that fills as your hand approaches the pose; and an
   *INCOMING · RAISE SHIELD* prompt when a projectile on a hitting course is under 0.9 s away.
 
 **How the pose is detected** (`ShieldGestureRecognizer`, all thresholds in `ShieldGestureConfig`):
-from the tracked hand's geometry (`HandShape`: joint bounds, wrist→middle-knuckle axis), never a
-single landmark.
-- **Coverage:** the hand must span ≥ 45% of the *height* of a central shield region (x 0.30–0.70,
-  y 0.15–0.85 of the view), and its center must be inside the region horizontally.
-- **Closeness:** wrist→knuckle length ≥ 13% of the frame height.
-- **Upright:** within 35° of vertical, fingers up.
-- **Extended:** the hand reaches ≥ 1.5 palm lengths vertically, which rejects a fist.
-  Height/width doesn't work for this: a real upright palm with a spread thumb is about as wide
-  as it is tall.
-- **Stability:** coverage is smoothed. The pose must hold for 2 new frames to count, and looser
-  exit thresholds plus 2 failing frames release it.
-- **Fails safe:** low-confidence frames are ignored, a dropout under 250 ms changes nothing, and
-  a dropout never activates.
+from the tracked finger joints, never a single landmark. The `PoseClassifier` measures each
+finger two independent ways, both invariant to hand size, distance and in-plane rotation:
+*extension* (wrist→fingertip vs. wrist→knuckle distance) and *straightness* (the joint angles at
+the middle and end joints). Their mean is the finger's extended score.
+- **Index up:** extended score ≥ 0.75 (stays down to 0.5).
+- **Others curled:** middle, ring and little each curled score ≥ 0.7 (stays down to 0.45).
+- **Anywhere in view:** no screen region is required; the shield blocks along your aim direction.
+  The thumb is ignored (Vision's thumb joints are unreliable), so a "finger gun" also counts.
+- **Recognition interval:** scores are smoothed, and the pose must hold for 3 new frames
+  spanning at least 80 ms (≈ 0.1–0.17 s at 24–30 fps) to activate.
+- **Release:** 2 confident frames below the looser exit thresholds, or the hand gone for over
+  300 ms. Only after a recognized release can the next activation start.
+- **Fails safe:** low-confidence frames and frames where any finger can't be measured are
+  ignored (they neither activate nor release); a dropout never activates. The 0.5 s window is
+  timed by the shield itself, so tracking loss can't keep it up.
+- **Limitation:** a finger pointing straight at or away from the camera is foreshortened and
+  looks bent; hold it up or to the side.
 
-These values are validated on real Vision landmarks and simulated input, **not yet on glasses
-footage**.
+These values are validated on real Vision landmarks (still photos) and simulated input, **not
+yet on glasses footage**.
 
 **Keys:** `Q`/`Tab` switch spells · `R` recenter the head · `Esc` leave the run (not recorded).
 
@@ -435,7 +453,7 @@ footage**.
 
 | Option | What it is |
 |---|---|
-| **Simulated input (dev)** (Start Menu) | Mouse = hand position; hold the mouse button or **Space/F** = fist; hold **V** = V sign; hold **B** = shield blocking pose; **arrow keys** = head turn. It goes through the same input interfaces, recognizers and game as the real inputs, is labeled **SIMULATED INPUT (dev)** on screen, and is never re-enabled on launch. |
+| **Simulated input (dev)** (Start Menu) | Mouse = hand position; hold the mouse button or **Space/F** = fist; hold **V** = V sign; hold **B** = shield one-finger pose; **arrow keys** = head turn. It goes through the same input interfaces, recognizers and game as the real inputs, is labeled **SIMULATED INPUT (dev)** on screen, and is never re-enabled on launch. |
 | **Mac webcam** (Glasses & tracking setup → Source) | The real camera pipeline (Vision → classifier) on the Mac camera, badged *DEV*. |
 | `tool/send_frames.py` | Streams JPEGs into the running app over the real link. `--motion-yaw 20` also sends glasses-style orientation, to exercise head tracking. Relayed audio events are printed. |
 
@@ -1135,7 +1153,7 @@ All thresholds are in `HandTrackerConfig`.
 | Dart tests: coordinates, view mapping (incl. inverse for all fit/mirror/rotation combos), geometry, One Euro filter, tracker, controller with a fake native layer, event parsing | `flutter test` |
 | Game tests: pose classifier (synthetic + real Vision landmarks), cast state machine, all game rules, dwell selection, leaderboard/settings persistence, navigation, camera-input adapter, full app flow widget tests | `flutter test test/games test/input test/ui test/platform test/app` |
 | v3 tests: difficulty, slime, Chain Lightning, unlock, spell switch, head tracker, staff/aim, settings/progression persistence, audio dedup and event→sound positions, dwell guard, stream indicator | `flutter test test/games/wizard_v3_test.dart test/input/head_and_staff_test.dart test/audio test/ui` |
-| v4 tests: shield, projectiles, skeleton cycle, auto-aim, health bars, day-night and boss, boss unlock, tutorial mode (`test/games/wizard_v4_test.dart`); shield gesture on real landmarks (`test/input/shield_gesture_test.dart`); volumes, music, route verification, progression (`test/audio/audio_v4_test.dart`); tutorial and menu camera widget tests (`test/app/tutorial_and_menus_test.dart`) | `flutter test test/games/wizard_v4_test.dart test/input/shield_gesture_test.dart test/audio/audio_v4_test.dart test/app/tutorial_and_menus_test.dart` |
+| v4 tests: shield, projectiles, skeleton cycle, auto-aim, health bars, day-night and boss, boss unlock, tutorial mode (`test/games/wizard_v4_test.dart`); shield gesture on real landmarks (`test/input/shield_gesture_test.dart`); volumes, music, route verification, progression (`test/audio/audio_v4_test.dart`); tutorial and menu camera widget tests (`test/app/tutorial_and_menus_test.dart`, `test/ui/camera_feed_test.dart`) | `flutter test test/games/wizard_v4_test.dart test/input/shield_gesture_test.dart test/audio/audio_v4_test.dart test/app/tutorial_and_menus_test.dart test/ui/camera_feed_test.dart` |
 | Spatial audio engine, offline (no speakers): all sounds synthesize, L/R placement in stereo and binaural, distance falloff, listener turn direction, volume, and (v4) three seamless music loops, music volume, track dedup | `tool/audio_probe.sh` |
 | Static analysis | `flutter analyze` |
 | Link integration: real Mac `FrameServer` + real companion `FrameSender` over loopback; Bonjour, framing, backpressure, commands, disconnect, reconnect, corrupt input | `tool/link_selftest.sh` |
@@ -1183,8 +1201,8 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
 | Companion shows *Head motion: unavailable* | Enable the experimental Motion capability for the app in the Wearables Developer Center, and update the glasses and Meta AI. The game still works with hand aim only. |
 | V sign doesn't switch spells | Chain Lightning must be unlocked (defeat your first night boss). Hold index + middle fingers up with the others curled for about half a second; **seen: victory** should show. Q/Tab and clicking work too. |
 | Settings says *Requested: Glasses via iPhone* but *not on the glasses* | Open the companion: **Game audio** shows what iOS is playing on. Use its audio output picker (or Control Center → AirPlay) to choose the glasses. Keep the companion in the foreground. |
-| Shield never comes up | Raise the forearm **upright and close** so the hand fills the middle of the view; watch the shield chip's pip fill. Tune `ShieldGestureConfig` if your camera framing differs. In simulated input, hold **B**. |
-| Shield comes up when I just want to cast | Cast with the hand lower or farther from the face. A large, upright hand in the middle counts as blocking (and cancels the readied spell). |
+| Shield never comes up | Hold the index finger up with the other fingers clearly curled, the finger pointing up or sideways (not at the camera); watch the shield chip's pip fill. Tune `ShieldGestureConfig` if needed. In simulated input, hold **B**. |
+| Shield comes up when I just want to cast | Open or close all fingers together. A hand with only the index up counts as the shield pose (and cancels the readied spell). |
 | No music | Settings → Audio: *Music: On*, music and master volume up. |
 | Reset the leaderboard / settings | `defaults delete ~/Library/Containers/com.metarayzer.metarayzer/Data/Library/Preferences/com.metarayzer.metarayzer` |
 

@@ -29,7 +29,7 @@ class WizardSceneState {
   HeadView head = HeadView.none;
   bool simulated = false;
 
-  /// 0..1 how close the hand is to the shield's blocking pose (HUD hint).
+  /// 0..1 how close the hand is to the shield's one-finger pose (HUD hint).
   double shieldReadiness = 0;
 
   /// Draw the shield/day HUD chips (off for tutorial steps that don't use them).
@@ -966,8 +966,8 @@ class WizardPainter extends CustomPainter {
     final shield = s.game.shield;
     final (String text, Color color) = switch (shield.state) {
       ShieldState.active => ('SHIELD UP ${(shield.remaining * 1000).round()} ms', const Color(0xFF6CF2FF)),
-      ShieldState.recharging => ('Shield · lower your hand to re-arm', const Color(0xFF8A84A0)),
-      ShieldState.ready => ('Shield ready · raise your hand upright in front of your face', const Color(0xFFBFF4FF)),
+      ShieldState.recharging => ('Shield · relax your finger to re-arm', const Color(0xFF8A84A0)),
+      ShieldState.ready => ('Shield ready · hold up one finger', const Color(0xFFBFF4FF)),
     };
     final tp = _layout(text, 12, color, bold: shield.isActive);
     final rect = Rect.fromCenter(center: Offset(size.width / 2, size.height - 96), width: tp.width + 44, height: 24);
@@ -976,7 +976,7 @@ class WizardPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
       ..color = color.withValues(alpha: 0.6));
-    // Readiness pip: fills as the hand approaches the blocking pose.
+    // Readiness pip: fills as the hand approaches the one-finger pose.
     final pip = Offset(rect.left + 14, rect.center.dy);
     final fill = shield.isActive ? shield.activeFraction : (shield.state == ShieldState.ready ? s.shieldReadiness : 0.0);
     canvas.drawCircle(pip, 6, Paint()

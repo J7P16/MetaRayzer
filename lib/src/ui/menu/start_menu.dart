@@ -71,7 +71,7 @@ class _TitleColumn extends StatelessWidget {
           const _Step(icon: Icons.back_hand_outlined, text: "Raise your LEFT hand into the glasses' view, fingers pointing up. Your staff follows it."),
           const _Step(icon: Icons.sports_mma, text: 'Close it into a FIST: your spell is ready.'),
           const _Step(icon: Icons.front_hand, text: 'Snap it OPEN to cast. Close your fist again before the next spell.'),
-          const _Step(icon: Icons.shield_outlined, text: 'SHIELD: raise your forearm upright, close in front of your face. It blocks arrows and bolts for 0.5 s; lower your hand to use it again.'),
+          const _Step(icon: Icons.shield_outlined, text: 'SHIELD: hold up one finger (index up, other fingers curled). It blocks arrows and bolts for 0.5 s; relax the finger to use it again.'),
           _Step(
             icon: Icons.bolt,
             text: lightning

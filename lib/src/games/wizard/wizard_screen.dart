@@ -169,7 +169,7 @@ class WizardStage extends StatelessWidget {
           ListenableBuilder(
             listenable: Listenable.merge([tracking, settings, handInput]),
             builder: (context, _) {
-              final show = settings.showCameraInset && !handInput.useSimulated && tracking.hasFrame;
+              final show = settings.showCameraInset && cameraFeedState(tracking, simulated: handInput.useSimulated) != CameraFeedState.hidden;
               if (!show) return const SizedBox.shrink();
               return Positioned(
                 right: 16,
@@ -182,7 +182,7 @@ class WizardStage extends StatelessWidget {
                     child: DecoratedBox(
                       position: DecorationPosition.foreground,
                       decoration: BoxDecoration(border: Border.all(color: const Color(0x88FFD27A)), borderRadius: BorderRadius.circular(12)),
-                      child: Opacity(opacity: 0.85, child: CameraPreview(controller: tracking)),
+                      child: Opacity(opacity: 0.85, child: CameraFeedView(controller: tracking, simulated: handInput.useSimulated)),
                     ),
                   ),
                 ),

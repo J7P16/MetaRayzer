@@ -154,7 +154,7 @@ class WizardTutorialScreenState extends State<WizardTutorialScreen> with SingleT
     final (GestureKind kind, String title, String text) = switch (flow.step) {
       TutorialStep.look => (GestureKind.look, 'LOOK AROUND', "This is your glasses' view. Turn your head left and right: the arena turns with you."),
       TutorialStep.cast => (GestureKind.cast, 'CAST A FIREBALL', 'Left hand, fingers up. Make a FIST, then snap it OPEN.'),
-      TutorialStep.shield => (GestureKind.shield, 'BLOCK THE ARROW', 'Raise your forearm upright in front of your face as the arrow arrives. The shield lasts 0.5 s and stops projectiles only.'),
+      TutorialStep.shield => (GestureKind.shield, 'BLOCK THE ARROW', 'Hold up one finger (index up, other fingers curled) as the arrow arrives. The shield lasts 0.5 s and stops projectiles only.'),
       TutorialStep.done => (GestureKind.look, '', ''),
     };
     return FantasyPanel(
@@ -211,7 +211,7 @@ class WizardTutorialScreenState extends State<WizardTutorialScreen> with SingleT
         final feedback = switch (flow.lastAttempt) {
           ShieldAttempt.blocked => 'Blocked!',
           ShieldAttempt.tooEarly => 'Too early: the shield faded before the arrow arrived',
-          ShieldAttempt.tooLate => 'Too late (or the pose was not recognized): raise it as the arrow comes close',
+          ShieldAttempt.tooLate => 'Too late (or the pose was not recognized): hold up one finger as the arrow comes close',
           ShieldAttempt.none => 'Watch the skeleton: it warns, then fires',
         };
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -229,7 +229,7 @@ class WizardTutorialScreenState extends State<WizardTutorialScreen> with SingleT
           ]),
           const SizedBox(height: 8),
           _Chip(text: feedback, ok: flow.lastAttempt == ShieldAttempt.blocked ? true : (flow.lastAttempt == ShieldAttempt.none ? null : false)),
-          if (host.settings.simulatedInput) ...[const SizedBox(height: 6), const _Chip(text: 'Simulated: hold B for the blocking pose', ok: null)],
+          if (host.settings.simulatedInput) ...[const SizedBox(height: 6), const _Chip(text: 'Simulated: hold B for the one-finger pose', ok: null)],
         ]);
       case TutorialStep.done:
         return const SizedBox.shrink();

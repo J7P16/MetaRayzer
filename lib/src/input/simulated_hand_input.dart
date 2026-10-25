@@ -13,7 +13,7 @@ import 'hand_pose.dart';
 /// - Pointer position (over the app window) = hand position.
 /// - Hold the mouse button or Space/F = closed fist; release = open palm.
 /// - Hold V key = V sign (spell-switch pose).
-/// - Hold B key = shield blocking pose (an upright hand filling the middle of the view).
+/// - Hold B key = shield pose (index finger up, the other fingers curled).
 /// - Pointer outside the window = no hand.
 ///
 /// Samples are published at a fixed rate like a camera, so frame-based gesture confirmation
@@ -22,7 +22,6 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
   SimulatedHandInput({this.fps = 30});
 
   final int fps;
-  final Stopwatch _clock = Stopwatch()..start();
   Timer? _timer;
   int _frameId = 0;
   Offset? _position;
@@ -62,12 +61,13 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
 
   void setBlock(bool block) => _block = block;
 
-  /// The geometry a real upright hand raised close in front of the camera produces.
-  static const blockShape = HandShape(
-    bounds: Rect.fromLTRB(0.36, 0.14, 0.62, 0.84),
-    wrist: Offset(0.49, 0.80),
-    middleKnuckle: Offset(0.49, 0.52),
-    aspect: 504 / 896,
+  /// What the classifier reports for a real index-finger-up hand (see the pointing_up fixture).
+  static const pointClassification = PoseClassification(
+    pose: HandPose.unknown,
+    confidence: 1,
+    openness: 0.25,
+    fingerExtension: [1, 0, 0, 0],
+    fingerStraightness: [1, 0, 0, 0],
   );
 
   /// An ordinary hand at arm's length (for casting).
@@ -78,9 +78,13 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
         aspect: 504 / 896,
       );
 
+  List<double> get _fingers => _victory ? const [1, 1, 0, 0] : (_fist ? const [0, 0, 0, 0] : const [1, 1, 1, 1]);
+
   void _emit() {
     _frameId++;
-    final now = _clock.elapsedMicroseconds / 1000;
+    // Camera-like timestamps: one frame period per sample, so time-based gesture rules see the
+    // same timing whether the timer runs on the wall clock or in a test's fake time.
+    final now = _frameId * 1000 / fps;
     final position = _position;
     _value = position == null
         ? HandInputFrame(status: HandTrackingStatus.searching, frameId: _frameId, timestampMs: now, simulated: true)
@@ -88,15 +92,19 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
             status: HandTrackingStatus.tracking,
             frameId: _frameId,
             timestampMs: now,
-            position: _block ? blockShape.bounds.center : position,
+            position: position,
             simulated: true,
             handId: 1,
-            shape: _block ? blockShape : _castShape(position),
-            classification: PoseClassification(
-              pose: _block ? HandPose.open : (_victory ? HandPose.victory : (_fist ? HandPose.fist : HandPose.open)),
-              confidence: 1,
-              openness: _fist ? 0 : (_victory ? 0.5 : 1),
-            ),
+            shape: _castShape(position),
+            classification: _block
+                ? pointClassification
+                : PoseClassification(
+                    pose: _victory ? HandPose.victory : (_fist ? HandPose.fist : HandPose.open),
+                    confidence: 1,
+                    openness: _fist ? 0 : (_victory ? 0.5 : 1),
+                    fingerExtension: _fingers,
+                    fingerStraightness: _fingers,
+                  ),
           );
     notifyListeners();
   }

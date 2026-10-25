@@ -93,6 +93,7 @@ class TrackingController extends ChangeNotifier {
   }
 
   Future<void> start() async {
+    if (_sub != null) return; // one native subscription and listener, however often called
     _sub = _native.events.listen(_onEvent, onError: (Object e) => _setError('Native event stream error: $e'));
     _housekeeping = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
     try {

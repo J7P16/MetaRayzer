@@ -22,7 +22,7 @@ enum HandTrackingStatus {
 
 /// Coarse geometry of the tracked hand in display-normalized coordinates (same space as
 /// [HandInputFrame.position]), derived from the landmarks by the input adapter so consumers
-/// (the shield gesture) never handle raw landmarks.
+/// never handle raw landmarks.
 @immutable
 class HandShape {
   const HandShape({required this.bounds, required this.wrist, required this.middleKnuckle, required this.aspect, this.confidence = 1});

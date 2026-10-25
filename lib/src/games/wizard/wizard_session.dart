@@ -15,7 +15,7 @@ import 'wizard_game.dart';
 
 /// Everything that turns input into gameplay for one [WizardGame], shared by the real run screen
 /// and the tutorial so both behave identically:
-/// - hand → cast (fist→open), spell switch (held ✌) and shield (blocking pose);
+/// - hand → cast (fist→open), spell switch (held ✌) and shield (one finger up);
 /// - hand + head → staff, aim and shield direction;
 /// - game events → effects and positioned sounds.
 ///
@@ -53,8 +53,9 @@ class WizardSession {
     shieldGesture.update(frame);
     game.setShieldPose(shieldGesture.held);
     scene.shieldReadiness = shieldGesture.readiness;
-    if (shieldGesture.candidate || shieldGesture.held) {
-      // A raised blocking hand must never also fire (or keep armed) a spell.
+    if (shieldGesture.held) {
+      // A shield pose must never also fire (or keep armed) a spell. While it is only being
+      // recognized the classifier reports it as neither fist nor open, so it can't cast.
       gesture.reset();
       spellSwitch.reset();
     } else {
@@ -85,7 +86,7 @@ class WizardSession {
   }
 
   /// Shared keys: Q/Tab switch spells, R recenters the head, and in simulated input V = ✌,
-  /// B = blocking pose, arrows = head turn. Returns whether the key was handled.
+  /// B = shield pose (one finger up), arrows = head turn. Returns whether the key was handled.
   bool handleKey(KeyEvent event) {
     final key = event.logicalKey;
     final down = event is KeyDownEvent;

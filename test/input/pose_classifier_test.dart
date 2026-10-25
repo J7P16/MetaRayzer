@@ -92,5 +92,21 @@ void main() {
         expect(c.confidence, greaterThan(0.45));
       });
     }
+
+    test('finger straightness (joint angles) agrees with the photographed poses', () {
+      List<double> straightness(String source) {
+        final h = (doc['hands'] as List).cast<Map>().firstWhere((h) => h['source'] == source);
+        final landmarks = Float64List.fromList((h['landmarks'] as List).cast<num>().map((n) => n.toDouble()).toList());
+        return classifier.classify(landmarks, aspect: (h['width'] as int) / (h['height'] as int)).fingerStraightness;
+      }
+
+      expect(straightness('male_full_height_hands.jpg'), everyElement(greaterThan(0.9)), reason: 'open palm: all straight');
+      final point = straightness('pointing_up.jpg');
+      expect(point[0], greaterThan(0.9), reason: 'index up');
+      expect(point.skip(1), everyElement(lessThan(0.1)), reason: 'other fingers bent');
+      final v = straightness('victory.jpg');
+      expect(v.take(2), everyElement(greaterThan(0.9)));
+      expect(v.skip(2), everyElement(lessThan(0.1)));
+    });
   });
 }
