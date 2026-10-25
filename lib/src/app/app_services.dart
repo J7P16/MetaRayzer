@@ -37,6 +37,15 @@ class AppServices {
     );
     settings.addListener(_applySettings);
     _applySettings();
+    navigator.addListener(_syncMusic);
+    _syncMusic();
+  }
+
+  /// Menu music on every non-game screen (the tutorial included); a running game picks its own
+  /// day/night track. Same-track requests are ignored, so navigating between menus never
+  /// restarts the music.
+  void _syncMusic() {
+    if (navigator.route is! PlayingRoute) audio.setMusic(MusicTracks.menu);
   }
 
   final TrackingController tracking;

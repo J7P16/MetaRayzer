@@ -29,6 +29,21 @@ class DifficultyController {
   double get archerIntervalMultiplier => _lerp(spec.archerIntervalMultiplierStart, spec.archerIntervalMultiplierEnd);
   double get arrowSpeedMultiplier => _lerp(spec.arrowSpeedMultiplierStart, spec.arrowSpeedMultiplierEnd);
 
+  double get aimSpreadMultiplier => _lerp(spec.aimSpreadMultiplierStart, spec.aimSpreadMultiplierEnd);
+
+  /// Lateral aim error (± world units at the player) for a projectile, floored at
+  /// [ProjectileSpec.minAimSpread] so difficulty never restores perfect aim.
+  double aimSpreadFor(ProjectileSpec projectile) {
+    final scaled = projectile.aimSpread * aimSpreadMultiplier;
+    return scaled < projectile.minAimSpread ? projectile.minAimSpread : scaled;
+  }
+
+  /// A ranged telegraph: [base] scaled by the wind-up multiplier, never below [floor].
+  double telegraphFor(double base, double floor) {
+    final scaled = base * _lerp(spec.windupMultiplierStart, spec.windupMultiplierEnd);
+    return scaled < floor ? floor : scaled;
+  }
+
   /// Telegraph (wind-up) duration for an enemy, with a floor so attacks stay reactable.
   double windupFor(EnemySpec enemy) {
     final scaled = enemy.attackWindup * _lerp(spec.windupMultiplierStart, spec.windupMultiplierEnd);

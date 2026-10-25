@@ -96,7 +96,8 @@ void main() {
       final g = quietGame();
       final a = g.spawn(EnemyKind.skeletonArcher, x: 0) as SkeletonArcher;
       step(g, 40);
-      expect(a.distance, closeTo(a.spec.attackDistance, 1e-6));
+      // v4: it sidesteps between shots, so it stays at its stand-off depth, not an exact radius.
+      expect(a.distance, closeTo(a.spec.attackDistance, 0.2));
       expect(a.distance, lessThan(g.config.fireballRange), reason: 'archers must be killable');
       expect(g.lives, lessThan(3), reason: 'its arrows hit the player');
       expect(a.isAlive, isTrue, reason: 'archers keep shooting rather than vanishing');
@@ -167,10 +168,12 @@ void main() {
     });
 
     test('each enemy type awards its configured score', () {
-      for (final kind in EnemyKind.values.where((k) => k != EnemyKind.slime)) { // slimes: see wizard_v3_test
+      for (final kind in EnemyKind.spawnable.where((k) => k != EnemyKind.slime)) { // slimes: see wizard_v3_test; boss: wizard_v4_test
         final g = quietGame();
-        g.spawn(kind, x: 0).z = 10;
-        g.castFireball();
+        final e = g.spawn(kind, x: 0)..z = 10;
+        for (var i = 0; i < e.maxHealth; i++) {
+          g.castFireball(); // one fireball per point of health (the skeleton has 2)
+        }
         step(g, 1);
         expect(g.score, g.config.spec(kind).score, reason: '$kind');
       }

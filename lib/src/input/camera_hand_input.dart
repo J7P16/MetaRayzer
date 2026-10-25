@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -106,6 +107,39 @@ class CameraHandInput extends ChangeNotifier implements HandInputSource {
       position: position,
       classification: classification,
       handId: hand.id,
+      shape: tracking && landmarks != null ? handShape(landmarks, mapping) : null,
+    );
+  }
+
+  /// Hand geometry in display-normalized coordinates (after the preview's mirror/rotation, like
+  /// the position). Null without a confident wrist and middle knuckle or fewer than 8 joints.
+  static HandShape? handShape(Float64List landmarks, FrameViewMapping mapping, {double minJointConfidence = 0.3}) {
+    if (landmarks.length < 63) return null;
+    Offset point(int j) => mapping.displayNormalized(landmarks[j * 3], landmarks[j * 3 + 1]);
+    double conf(int j) => landmarks[j * 3 + 2];
+    const wrist = 0, middleMcp = 9;
+    if (conf(wrist) < minJointConfidence || conf(middleMcp) < minJointConfidence) return null;
+    var (minX, minY, maxX, maxY) = (double.infinity, double.infinity, -double.infinity, -double.infinity);
+    var used = 0;
+    var confidence = 0.0;
+    for (var j = 0; j < 21; j++) {
+      if (conf(j) < minJointConfidence) continue;
+      final p = point(j);
+      minX = math.min(minX, p.dx);
+      maxX = math.max(maxX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxY = math.max(maxY, p.dy);
+      confidence += conf(j);
+      used++;
+    }
+    if (used < 8) return null;
+    final shown = mapping.displayedFrameSize;
+    return HandShape(
+      bounds: Rect.fromLTRB(minX, minY, maxX, maxY),
+      wrist: point(wrist),
+      middleKnuckle: point(middleMcp),
+      aspect: shown.height <= 0 ? 1 : shown.width / shown.height,
+      confidence: (confidence / used).clamp(0.0, 1.0),
     );
   }
 

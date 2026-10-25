@@ -30,6 +30,24 @@ enum SoundId: String, CaseIterable {
   case unlock
   case spellSwitch = "spell_switch"
   case gameOver = "game_over"
+  // Version 4.
+  case shieldUp = "shield_up"
+  case shieldBlock = "shield_block"
+  case shieldFade = "shield_fade"
+  case archerWarn = "archer_warn"
+  case projectileMiss = "projectile_miss"
+  case bossCharge = "boss_charge"
+  case bossBolt = "boss_bolt"
+  case bossAppear = "boss_appear"
+  case bossDefeat = "boss_defeat"
+  case nightFall = "night_fall"
+  case dawn
+  case tutorialSuccess = "tutorial_success"
+}
+
+/// Background music tracks shared with Dart (MusicTracks in lib/src/audio/audio_service.dart).
+enum MusicTrack: String, CaseIterable {
+  case menu, day, night
 }
 
 /// Generates mono Float32 buffers (for the 3D environment) and a stereo ambient loop.
@@ -151,7 +169,76 @@ enum SoundSynth {
         out = mix(out, delay(tone(0.8, { t in sin(2 * .pi * f * t) + 0.4 * sin(2 * .pi * f / 2 * t) }, env: .pluck(0.35), gain: 0.3), Double(i) * 0.28))
       }
       return mix(out, lowpass(tone(2.0, { t in saw(55 * t) }, env: .swell(0.4, 1.4), gain: 0.25), 0.05))
+    case .shieldUp:
+      // Bright rising shimmer: the shield snaps on.
+      return mix(whoosh(0.25, from: 900, to: 4200, gain: 0.25, rng: &rng),
+                 tone(0.45, { t in (sin(2 * .pi * 880 * t) + 0.6 * sin(2 * .pi * 1320 * t) + 0.3 * sin(2 * .pi * 1767 * t)) * (1 + 0.3 * sin(2 * .pi * 24 * t)) }, env: .swell(0.02, 0.18), gain: 0.22))
+    case .shieldBlock:
+      // Glassy clang + spark: a projectile stopped.
+      var out = tone(0.7, { t in sin(2 * .pi * 1046.5 * t) + 0.7 * sin(2 * .pi * 1568 * t) + 0.5 * sin(2 * .pi * 2637 * t) + 0.3 * sin(2 * .pi * 3951 * t) }, env: .pluck(0.16), gain: 0.32)
+      out = mix(out, highpass(noiseBurst(0.12, cutoffStart: 1, cutoffEnd: 0.6, decay: 0.03, gain: 0.6, rng: &rng), 0.35))
+      return mix(out, tone(0.25, { t in sin(2 * .pi * (180 - 80 * t) * t) }, env: .pluck(0.06), gain: 0.5))
+    case .shieldFade:
+      return tone(0.35, { t in sin(2 * .pi * (1320 - 700 * t) * t) * 0.6 }, env: .swell(0.02, 0.15), gain: 0.18)
+    case .archerWarn:
+      // Two sharp rising "incoming!" pips over a bone rattle: distinct from every other cue.
+      var out: [Float] = []
+      for i in 0..<2 {
+        out = mix(out, delay(tone(0.12, { t in square((1200 + 1400 * t * 8) * t) * 0.5 }, env: .pluck(0.05), gain: 0.22), Double(i) * 0.14))
+      }
+      for i in 0..<6 {
+        out = mix(out, delay(highpass(noiseBurst(0.03, cutoffStart: 0.8, cutoffEnd: 0.5, decay: 0.008, gain: 0.35, rng: &rng), 0.3), 0.3 + Double(i) * 0.035))
+      }
+      return out
+    case .projectileMiss:
+      return whoosh(0.4, from: 2600, to: 500, gain: 0.3, rng: &rng)
+    case .bossCharge:
+      // Rising unearthly choir tone over the telegraph.
+      return mix(tone(1.3, { t in (sin(2 * .pi * (110 + 160 * t) * t) + 0.5 * sin(2 * .pi * (165 + 240 * t) * t)) * (0.6 + 0.4 * sin(2 * .pi * 6 * t)) }, env: .swell(1.1, 0.15), gain: 0.3),
+                 whoosh(1.3, from: 200, to: 1600, gain: 0.18, rng: &rng))
+    case .bossBolt:
+      return mix(tone(0.6, { t in saw((220 - 150 * t) * t) * 0.6 + sin(2 * .pi * (110 - 50 * t) * t) }, env: .pluck(0.2), gain: 0.4),
+                 whoosh(0.5, from: 300, to: 2000, gain: 0.3, rng: &rng))
+    case .bossAppear:
+      // Low horn swell and a dissonant cluster: a boss has arrived.
+      var out = lowpass(tone(2.4, { t in saw(55 * t) + saw(55.4 * t) + 0.6 * saw(82.4 * t) }, env: .swell(0.6, 1.2), gain: 0.4), 0.06)
+      for (i, f) in [233.08, 246.94, 329.63].enumerated() {
+        out = mix(out, delay(tone(1.6, { t in sin(2 * .pi * f * t) * (0.7 + 0.3 * sin(2 * .pi * 5 * t)) }, env: .swell(0.3, 0.9), gain: 0.14), 0.25 + Double(i) * 0.12))
+      }
+      return out
+    case .bossDefeat:
+      // Shattering bones, then a triumphant major arpeggio.
+      var out = lowpass(noiseBurst(1.0, cutoffStart: 0.5, cutoffEnd: 0.02, decay: 0.3, gain: 0.7, rng: &rng), 0.3)
+      for i in 0..<10 {
+        out = mix(out, delay(highpass(noiseBurst(0.05, cutoffStart: 0.9, cutoffEnd: 0.5, decay: 0.012, gain: 0.45, rng: &rng), 0.3), Double(i) * 0.06 + rng.unit() * 0.03))
+      }
+      for (i, f) in [392.0, 493.88, 587.33, 783.99, 987.77].enumerated() {
+        out = mix(out, delay(tone(1.0, { t in sin(2 * .pi * f * t) + 0.3 * sin(2 * .pi * 2 * f * t) }, env: .pluck(0.35), gain: 0.22), 0.6 + Double(i) * 0.1))
+      }
+      return out
+    case .nightFall:
+      return mix(lowpass(tone(2.2, { t in saw(73.42 * t) + saw(73.8 * t) }, env: .swell(0.8, 1.0), gain: 0.3), 0.05),
+                 tone(2.0, { t in sin(2 * .pi * (587.33 - 120 * t) * t) * 0.5 }, env: .swell(0.4, 1.0), gain: 0.12))
+    case .dawn:
+      var out: [Float] = []
+      for (i, f) in [293.66, 369.99, 440.0, 587.33].enumerated() {
+        out = mix(out, delay(tone(1.4, { t in sin(2 * .pi * f * t) + 0.25 * sin(2 * .pi * 2 * f * t) }, env: .swell(0.15, 0.8), gain: 0.18), Double(i) * 0.16))
+      }
+      return out
+    case .tutorialSuccess:
+      var out: [Float] = []
+      for (i, f) in [659.25, 783.99, 1046.5].enumerated() {
+        out = mix(out, delay(tone(0.5, { t in sin(2 * .pi * f * t) + 0.3 * sin(2 * .pi * 3 * f * t) }, env: .pluck(0.2), gain: 0.28), Double(i) * 0.08))
+      }
+      return out
     }
+  }
+
+  // MARK: - Music
+
+  /// A seamless stereo loop for [track] (see [MusicSynth]).
+  static func music(_ track: MusicTrack, format: AVAudioFormat) -> AVAudioPCMBuffer {
+    makeBuffer(MusicSynth.render(track), format: format)
   }
 
   // MARK: - DSP helpers
@@ -256,6 +343,130 @@ enum SoundSynth {
       for i in 0..<frames { dst[i] = i < src.count ? src[i] * norm : 0 }
     }
     return buffer
+  }
+}
+
+/// A tiny sequencer for the background music: chord pads, a bass line, an arpeggio and (for the
+/// gameplay tracks) light percussion. Notes that ring past the end of the loop wrap around to
+/// its start, so every track loops without a seam.
+enum MusicSynth {
+  struct Score {
+    let bpm: Double
+    /// One chord (MIDI notes) per bar.
+    let chords: [[Int]]
+    /// Arpeggio steps per beat (0 = none) and the octave shift applied to it.
+    let arpPerBeat: Int
+    let arpOctave: Int
+    /// Bass notes per bar (on the beat).
+    let bassPerBar: Int
+    let drums: Bool
+    let padGain: Double
+    let darkness: Double
+  }
+
+  static func score(_ track: MusicTrack) -> Score {
+    switch track {
+    case .menu:
+      // Calm, mysterious: Am – F – C – G, slow arpeggio, no drums.
+      return Score(bpm: 72, chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], arpPerBeat: 2, arpOctave: 12, bassPerBar: 1, drums: false, padGain: 0.16, darkness: 0.3)
+    case .day:
+      // Driving but bright: Dm – C – Bb – C, eighth-note arpeggio, light kick/hat.
+      return Score(bpm: 104, chords: [[50, 53, 57], [48, 52, 55], [46, 50, 53], [48, 52, 55], [50, 53, 57], [48, 52, 55], [46, 50, 53], [45, 49, 52]], arpPerBeat: 2, arpOctave: 12, bassPerBar: 4, drums: true, padGain: 0.12, darkness: 0.2)
+    case .night:
+      // The boss: E Phrygian ostinato, low and tense, heavier drums.
+      return Score(bpm: 128, chords: [[40, 43, 47], [41, 45, 48], [40, 43, 47], [38, 42, 45], [40, 43, 47], [41, 45, 48], [43, 46, 50], [41, 44, 48]], arpPerBeat: 4, arpOctave: 12, bassPerBar: 8, drums: true, padGain: 0.13, darkness: 0.6)
+    }
+  }
+
+  static func hz(_ midi: Int) -> Double { 440 * pow(2, Double(midi - 69) / 12) }
+
+  static func render(_ track: MusicTrack) -> [[Float]] {
+    let sc = score(track)
+    let sr = SoundSynth.sampleRate
+    let beat = 60 / sc.bpm
+    let bar = beat * 4
+    let n = Int((bar * Double(sc.chords.count) * sr).rounded())
+    var left = [Float](repeating: 0, count: n), right = [Float](repeating: 0, count: n)
+    var rng = SplitMix(seed: UInt64(track.rawValue.unicodeScalars.reduce(7) { $0 &* 131 &+ UInt64($1.value) }))
+
+    /// Adds a note starting at [at] seconds, wrapping past the loop end.
+    func add(_ at: Double, _ seconds: Double, pan: Double, gain: Double, _ wave: (Double) -> Double) {
+      let start = Int(at * sr), count = Int(seconds * sr)
+      let gl = Float(gain * sqrt(0.5 * (1 - pan))), gr = Float(gain * sqrt(0.5 * (1 + pan)))
+      for k in 0..<count {
+        let v = Float(wave(Double(k) / sr))
+        let i = (start + k) % n
+        left[i] += v * gl
+        right[i] += v * gr
+      }
+    }
+
+    for (b, chord) in sc.chords.enumerated() {
+      let t0 = Double(b) * bar
+      // Pad: detuned saws through a soft envelope, one voice per chord tone, spread in stereo.
+      for (k, note) in chord.enumerated() {
+        let f = hz(note + 12)
+        let pan = Double(k - 1) * 0.5
+        var lp = 0.0
+        let cutoff = 0.04 - 0.02 * sc.darkness
+        add(t0, bar + 0.6, pan: pan, gain: sc.padGain) { t in
+          let raw = SoundSynth.saw(f * t) + SoundSynth.saw(f * 1.004 * t) + 0.5 * sin(2 * .pi * f * 0.5 * t)
+          lp += cutoff * (raw - lp)
+          let env = min(1, t / 0.5) * (t > bar ? exp(-(t - bar) / 0.2) : 1)
+          return lp * env
+        }
+      }
+      // Bass.
+      let step = bar / Double(sc.bassPerBar)
+      for i in 0..<sc.bassPerBar {
+        let f = hz(chord[0] - 12 + (track == .night && i % 4 == 3 ? 1 : 0))
+        add(t0 + Double(i) * step, step * 0.95, pan: 0, gain: track == .menu ? 0.22 : 0.26) { t in
+          (sin(2 * .pi * f * t) + 0.35 * SoundSynth.saw(f * t)) * exp(-t / (step * 0.6)) * min(1, t / 0.005)
+        }
+      }
+      // Arpeggio: chord tones up and down, alternating left/right.
+      if sc.arpPerBeat > 0 {
+        let steps = 4 * sc.arpPerBeat
+        let pattern = chord + [chord[1] + 12, chord[0] + 12] + chord.reversed().dropFirst()
+        for i in 0..<steps {
+          let note = pattern[i % pattern.count] + sc.arpOctave
+          let f = hz(note)
+          let at = t0 + Double(i) * beat / Double(sc.arpPerBeat)
+          add(at, 0.45, pan: i % 2 == 0 ? -0.35 : 0.35, gain: track == .menu ? 0.1 : 0.075) { t in
+            (sin(2 * .pi * f * t) + 0.25 * sin(2 * .pi * 2 * f * t)) * exp(-t / 0.14) * min(1, t / 0.003)
+          }
+        }
+      }
+      // Percussion.
+      if sc.drums {
+        for i in 0..<4 {
+          let at = t0 + Double(i) * beat
+          let kickGain = track == .night ? 0.5 : 0.35
+          if track == .night || i % 2 == 0 {
+            add(at, 0.3, pan: 0, gain: kickGain) { t in sin(2 * .pi * (95 * exp(-t * 18) + 45) * t) * exp(-t / 0.12) }
+          }
+          if i % 2 == 1 {
+            var hp = 0.0
+            let seed = rng.unit()
+            var noise = SplitMix(seed: UInt64(seed * 1e9))
+            add(at, 0.18, pan: 0.1, gain: track == .night ? 0.22 : 0.15) { t in
+              let x = Double(noise.noise())
+              hp += 0.25 * (x - hp)
+              return (x - hp) * exp(-t / 0.05)
+            }
+          }
+          // Off-beat hats.
+          var lpHat = 0.0
+          var noise = SplitMix(seed: UInt64(b * 16 + i + 1))
+          add(at + beat / 2, 0.06, pan: 0.3, gain: 0.07) { t in
+            let x = Double(noise.noise())
+            lpHat += 0.5 * (x - lpHat)
+            return (x - lpHat) * exp(-t / 0.015)
+          }
+        }
+      }
+    }
+    return [left, right]
   }
 }
 

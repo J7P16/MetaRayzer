@@ -39,10 +39,15 @@ class FakeNative implements MetarayzerNative {
   final listenerYaws = <double>[];
 
   @override
-  Future<Map<String, Object?>> audioConfigure({required double sfx, required double ambient, required String mode, required String output, required bool ambientOn}) async {
-    configs.add({'sfx': sfx, 'ambient': ambient, 'mode': mode, 'output': output, 'ambientOn': ambientOn});
+  Future<Map<String, Object?>> audioConfigure({required double sfx, required double ambient, required double music, required String mode, required String output, required bool ambientOn}) async {
+    configs.add({'sfx': sfx, 'ambient': ambient, 'music': music, 'mode': mode, 'output': output, 'ambientOn': ambientOn});
     return {'kind': 'mac', 'name': 'Test speakers'};
   }
+
+  final musicRequests = <String?>[];
+
+  @override
+  Future<void> audioMusic(String? track) async => musicRequests.add(track);
 
   @override
   Future<void> audioPlay(String sound, {double x = 0, double y = 1, double z = 1, double gain = 1, bool positional = true}) async =>

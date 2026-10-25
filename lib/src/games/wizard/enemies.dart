@@ -31,11 +31,15 @@ abstract class EnemyContext {
   /// A melee strike reaches the player.
   void meleeHit(Enemy attacker);
 
-  /// A ranged enemy releases a projectile toward the player.
-  void fireArrow(Enemy shooter);
+  /// A ranged enemy releases a straight, non-homing projectile aimed at the player's position
+  /// at this moment (plus the projectile's aim error), optionally rotated by [yawOffset].
+  void fireProjectile(Enemy shooter, ProjectileSpec spec, {double yawOffset = 0, double speedMultiplier = 1});
 
   /// An enemy started its telegraphed attack (for sound/visual cues).
   void attackStarted(Enemy enemy);
+
+  /// A boss calls [count] reinforcements of [kind] near itself.
+  void summon(EnemyKind kind, int count, Enemy near);
 }
 
 /// Shared enemy behavior, built from small overridable parts:
@@ -47,13 +51,24 @@ abstract class EnemyContext {
 /// - visuals/audio: chosen by [kind] in the view and audio layers
 /// Adding an enemy type = a subclass + an [EnemySpec] + one line in [createEnemy].
 abstract class Enemy {
-  Enemy({required this.id, required this.spec, required this.x, required this.z}) : health = spec.health;
+  Enemy({required this.id, required this.spec, required this.x, required this.z})
+      : health = spec.health,
+        maxHealth = spec.health;
 
   final int id;
   final EnemySpec spec;
   double x;
   double z;
   double health;
+
+  /// Health at full strength (health bars show [health] / [maxHealth]).
+  double maxHealth;
+
+  /// Seconds since this enemy last took damage (hit flash, health-bar damage trail).
+  double timeSinceDamage = double.infinity;
+
+  /// [health] as it was right before the most recent hit (for the health bar's damage trail).
+  double healthBeforeHit = 0;
   EnemyState state = EnemyState.approaching;
 
   /// Seconds spent in the current [state].
@@ -73,6 +88,9 @@ abstract class Enemy {
   double windup = 0;
 
   EnemyKind get kind => spec.kind;
+
+  /// 0..1 remaining health (0 once defeated).
+  double get healthFraction => isAlive && maxHealth > 0 ? (health / maxHealth).clamp(0.0, 1.0) : 0;
   double get distance => math.sqrt(x * x + z * z);
   bool get isAlive => state == EnemyState.approaching || state == EnemyState.attacking;
 
@@ -92,6 +110,7 @@ abstract class Enemy {
   void update(double dt, EnemyContext ctx) {
     age += dt;
     stateTime += dt;
+    timeSinceDamage += dt;
     switch (state) {
       case EnemyState.approaching:
         move(dt, ctx);
@@ -125,8 +144,11 @@ abstract class Enemy {
   /// decides about splitting before calling this.)
   bool takeDamage(double amount) {
     if (!isAlive || amount <= 0) return false;
+    healthBeforeHit = health;
+    timeSinceDamage = 0;
     health -= amount;
     if (health <= 1e-9) {
+      health = 0;
       enter(EnemyState.defeated);
       return true;
     }
@@ -217,43 +239,171 @@ class HoppingFrog extends Enemy {
   }
 }
 
-/// Ranged enemy: walks in slowly, stops at its attack distance (inside fireball range) and
-/// fires a visible arrow periodically, with a bow-draw telegraph. Attack frequency follows the
-/// difficulty controller.
+enum ArcherPhase { reposition, settle, telegraph, recover }
+
+/// Ranged enemy and the shield's teacher. Walks in slowly, stops at its attack distance (inside
+/// fireball range), then repeats a readable cycle:
+///   reposition (short sideways walk) → settle (still) → telegraph (bow draw + warning sound)
+///   → fire ONE arrow → recover → reposition …
+/// Each update performs at most one phase change, so the telegraph is never skipped by a long
+/// frame, and an arrow can only be released on the telegraph → recover transition (exactly one
+/// per cycle).
 class SkeletonArcher extends Enemy {
   SkeletonArcher({required super.id, required super.spec, required super.x, required super.z});
 
-  double _shotTimer = 0;
+  ArcherPhase phase = ArcherPhase.settle;
+  double phaseTime = 0;
+
+  /// Duration of the current telegraph (fixed when it starts).
+  double telegraphSeconds = 0;
+  double _phaseDuration = 0;
+  double _fromX = 0;
+  double _toX = 0;
+  int shotsFired = 0;
 
   /// 0..1 while drawing the bow (telegraph).
-  double drawProgress = 0;
-
-  @override
-  void move(double dt, EnemyContext ctx) => advance(stepSpeed(ctx) * dt);
-
-  double _interval(EnemyContext ctx) => ctx.config.archer.shotInterval * ctx.difficulty.archerIntervalMultiplier;
-
-  @override
-  void onReachedAttackDistance(EnemyContext ctx) {
-    _shotTimer = _interval(ctx) - windup - ctx.config.archer.firstShotDelay;
-  }
+  double get drawProgress => phase == ArcherPhase.telegraph && telegraphSeconds > 0 ? (phaseTime / telegraphSeconds).clamp(0.0, 1.0) : 0;
 
   @override
   double get attackProgress => drawProgress;
 
   @override
+  void move(double dt, EnemyContext ctx) => advance(stepSpeed(ctx) * dt);
+
+  @override
+  void onReachedAttackDistance(EnemyContext ctx) => _enter(ArcherPhase.settle, ctx);
+
+  void _enter(ArcherPhase next, EnemyContext ctx) {
+    final a = ctx.config.archer;
+    phase = next;
+    phaseTime = 0;
+    switch (next) {
+      case ArcherPhase.reposition:
+        _phaseDuration = a.repositionSeconds;
+        _fromX = x;
+        final limit = ctx.config.spawnHalfWidth * math.max(z / ctx.config.spawnDistance, 0.1);
+        _toX = (x + (ctx.random.nextDouble() * 2 - 1) * a.repositionStep).clamp(-limit, limit);
+      case ArcherPhase.settle:
+        _phaseDuration = a.settleSeconds;
+      case ArcherPhase.telegraph:
+        telegraphSeconds = ctx.difficulty.telegraphFor(a.telegraphSeconds, a.minTelegraphSeconds);
+        _phaseDuration = telegraphSeconds;
+        ctx.attackStarted(this);
+      case ArcherPhase.recover:
+        _phaseDuration = a.recoverSeconds * ctx.difficulty.archerIntervalMultiplier;
+    }
+  }
+
+  @override
   void attackUpdate(double dt, EnemyContext ctx) {
-    final interval = _interval(ctx);
-    windup = ctx.difficulty.windupFor(spec);
-    _shotTimer += dt;
-    final drawStart = interval - windup;
-    final wasDrawing = drawProgress > 0;
-    drawProgress = _shotTimer <= drawStart ? 0 : ((_shotTimer - drawStart) / windup).clamp(0.0, 1.0);
-    if (!wasDrawing && drawProgress > 0) ctx.attackStarted(this);
-    if (_shotTimer >= interval) {
-      _shotTimer = 0;
-      drawProgress = 0;
-      ctx.fireArrow(this);
+    phaseTime += dt;
+    if (phase == ArcherPhase.reposition) {
+      final p = (phaseTime / _phaseDuration).clamp(0.0, 1.0);
+      x = _fromX + (_toX - _fromX) * (p * p * (3 - 2 * p));
+    }
+    if (phaseTime < _phaseDuration) return;
+    switch (phase) {
+      case ArcherPhase.reposition:
+        _enter(ArcherPhase.settle, ctx);
+      case ArcherPhase.settle:
+        _enter(ArcherPhase.telegraph, ctx);
+      case ArcherPhase.telegraph:
+        shotsFired++;
+        ctx.fireProjectile(this, ctx.config.archer.arrow, speedMultiplier: ctx.difficulty.arrowSpeedMultiplier);
+        _enter(ArcherPhase.recover, ctx);
+      case ArcherPhase.recover:
+        _enter(ArcherPhase.reposition, ctx);
+    }
+  }
+}
+
+enum BossPhase { hover, telegraph, recover }
+
+enum BossAttack {
+  /// One large bolt aimed at the player.
+  aimedBolt,
+
+  /// Three bolts: the middle aims at the player, the side bolts pass beside them.
+  fan,
+}
+
+/// The night boss: glides in, hovers sideways at [BossSpec.standDistance], and alternates
+/// telegraphed, shield-blockable bolt volleys. Summons reinforcements once when weakened. Not a
+/// melee enemy: it never reaches the player.
+class BoneLich extends Enemy {
+  BoneLich({required super.id, required super.spec, required super.x, required super.z, required this.boss, required double health, required this.night}) {
+    this.health = health;
+    maxHealth = health;
+  }
+
+  final BossSpec boss;
+
+  /// The night (1-based) this boss belongs to.
+  final int night;
+
+  BossPhase phase = BossPhase.hover;
+  double phaseTime = 0;
+  double telegraphSeconds = 0;
+  BossAttack nextAttack = BossAttack.aimedBolt;
+  int volleys = 0;
+  bool summoned = false;
+  double _hover = 0;
+  double _phaseDuration = 0;
+
+  /// 0..1 while charging a volley.
+  double get chargeProgress => phase == BossPhase.telegraph && telegraphSeconds > 0 ? (phaseTime / telegraphSeconds).clamp(0.0, 1.0) : 0;
+
+  @override
+  double get attackProgress => chargeProgress;
+
+  @override
+  double get elevation => 0.6 + 0.25 * math.sin(age * 1.7);
+
+  @override
+  void move(double dt, EnemyContext ctx) => advance(boss.approachSpeed * dt);
+
+  @override
+  void onReachedAttackDistance(EnemyContext ctx) {
+    phase = BossPhase.hover;
+    phaseTime = 0;
+    _phaseDuration = boss.firstAttackDelay;
+  }
+
+  @override
+  void attackUpdate(double dt, EnemyContext ctx) {
+    phaseTime += dt;
+    if (!summoned && healthFraction < boss.summonBelowHealthFraction) {
+      summoned = true;
+      ctx.summon(boss.summonKind, boss.summonCount, this);
+    }
+    // Drift sideways between volleys; hold still while charging so the attack reads clearly.
+    if (phase != BossPhase.telegraph) {
+      _hover += dt * boss.hoverSpeed;
+      final targetX = math.sin(_hover) * boss.hoverAmplitude;
+      x += (targetX - x) * math.min(1, dt * 2);
+    }
+    if (phaseTime < _phaseDuration) return;
+    switch (phase) {
+      case BossPhase.hover || BossPhase.recover:
+        phase = BossPhase.telegraph;
+        phaseTime = 0;
+        telegraphSeconds = ctx.difficulty.telegraphFor(boss.telegraphSeconds, boss.minTelegraphSeconds);
+        _phaseDuration = telegraphSeconds;
+        ctx.attackStarted(this);
+      case BossPhase.telegraph:
+        switch (nextAttack) {
+          case BossAttack.aimedBolt:
+            ctx.fireProjectile(this, boss.bolt);
+          case BossAttack.fan:
+            for (final offset in [-boss.fanAngle, 0.0, boss.fanAngle]) {
+              ctx.fireProjectile(this, boss.bolt, yawOffset: offset);
+            }
+        }
+        volleys++;
+        nextAttack = nextAttack == BossAttack.aimedBolt ? BossAttack.fan : BossAttack.aimedBolt;
+        phase = BossPhase.recover;
+        phaseTime = 0;
+        _phaseDuration = boss.recoverSeconds;
     }
   }
 }
@@ -272,7 +422,7 @@ class SplittingSlime extends Enemy {
     required SlimeSpec slime,
   })  : _scale = math.pow(slime.childScale, generation).toDouble(),
         _speedFactor = math.pow(slime.childSpeedMultiplier, generation).toDouble() {
-    if (generation > 0) health = slime.childHealth;
+    if (generation > 0) health = maxHealth = slime.childHealth;
   }
 
   final int familyId;
@@ -310,5 +460,6 @@ Enemy createEnemy(EnemyKind kind, {required int id, required WizardConfig config
     EnemyKind.frog => HoppingFrog(id: id, spec: spec, x: x, z: z),
     EnemyKind.skeletonArcher => SkeletonArcher(id: id, spec: spec, x: x, z: z),
     EnemyKind.slime => SplittingSlime(id: id, spec: spec, x: x, z: z, familyId: familyId, slime: config.slime),
+    EnemyKind.boss => BoneLich(id: id, spec: spec, x: x, z: z, boss: config.boss, health: config.boss.baseHealth, night: 1),
   };
 }

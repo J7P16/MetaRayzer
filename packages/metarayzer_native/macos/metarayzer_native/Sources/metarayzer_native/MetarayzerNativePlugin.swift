@@ -8,7 +8,7 @@ import FlutterMacOS
 /// - Event channel `metarayzer_native/events`: a single stream of typed maps (`type` key):
 ///   `server`, `companion`, `companionStatus`, `frame`, `webcam`, `error`, `motion` (glasses
 ///   orientation relayed by the companion), `audioRoute`.
-/// - Audio: `audioConfigure`, `audioPlay`, `audioListener` (see AudioController).
+/// - Audio: `audioConfigure`, `audioPlay`, `audioListener`, `audioMusic` (see AudioController).
 ///
 /// All heavy work (network IO, JPEG decode, Vision inference) happens on background queues;
 /// only the final event hand-off hops to the main thread, as Flutter requires.
@@ -94,6 +94,9 @@ public class MetarayzerNativePlugin: NSObject, FlutterPlugin, FlutterStreamHandl
       result(nil)
     case "audioListener":
       audio.setListenerYaw(Float(args["yaw"] as? Double ?? 0))
+      result(nil)
+    case "audioMusic":
+      audio.setMusic(args["track"] as? String)
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -251,6 +254,8 @@ extension MetarayzerNativePlugin: FrameServerDelegate {
     case .status(let status):
       let event: [String: Any] = ["type": "companionStatus", "status": status]
       DispatchQueue.main.async {
+        // The phone's own audio report (engine + AVAudioSession outputs) verifies the relay route.
+        if let phoneAudio = status["audio"] as? [String: Any] { self.audio.companionAudio = phoneAudio }
         self.lastCompanionStatus = event
         self.sink?(event)
       }

@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
 import 'aim.dart';
+import 'day_night.dart';
 import 'difficulty.dart';
 import 'enemies.dart';
+import 'shield.dart';
 import 'wizard_config.dart';
 
 /// Things that happened during an update, for effects and sound. Drained by the view. Events
@@ -51,10 +53,58 @@ class PlayerHit extends GameEvent {
   final double z;
 }
 
-class ArrowFired extends GameEvent {
-  const ArrowFired(this.arrow, this.shooter);
-  final Arrow arrow;
+class ProjectileFired extends GameEvent {
+  const ProjectileFired(this.projectile, this.shooter);
+  final Projectile projectile;
   final Enemy shooter;
+}
+
+/// The shield stopped a projectile at ([x], [z]).
+class ProjectileBlocked extends GameEvent {
+  const ProjectileBlocked(this.projectile, {required this.x, required this.z});
+  final Projectile projectile;
+  final double x;
+  final double z;
+}
+
+/// A projectile reached the player (a [PlayerHit] follows in the same step).
+class ProjectileHitPlayer extends GameEvent {
+  const ProjectileHitPlayer(this.projectile);
+  final Projectile projectile;
+}
+
+/// A projectile passed the player without hitting and was removed.
+class ProjectileMissed extends GameEvent {
+  const ProjectileMissed(this.projectile);
+  final Projectile projectile;
+}
+
+class ShieldRaised extends GameEvent {
+  const ShieldRaised(this.yaw);
+  final double yaw;
+}
+
+class ShieldExpired extends GameEvent {
+  const ShieldExpired();
+}
+
+/// The day-night cycle entered [phase]. [night] is the number of nights so far.
+class PhaseChanged extends GameEvent {
+  const PhaseChanged(this.phase, this.night);
+  final DayPhase phase;
+  final int night;
+}
+
+class BossAppeared extends GameEvent {
+  const BossAppeared(this.boss);
+  final BoneLich boss;
+}
+
+/// A night boss was defeated by the player (a run reward; never emitted in tutorial mode).
+class BossDefeated extends GameEvent {
+  const BossDefeated(this.boss, this.points);
+  final BoneLich boss;
+  final int points;
 }
 
 class EnemySpawned extends GameEvent {
@@ -124,17 +174,48 @@ class Fireball {
   double get elevation => toElevation * progress + math.sin(progress * math.pi) * 0.6;
 }
 
-/// An enemy projectile flying toward the player.
-class Arrow {
-  Arrow({required this.x, required this.z, required this.speed});
+enum ProjectileKind { arrow, bossBolt }
+
+/// An enemy projectile. Its velocity is fixed at launch (aimed once, at release): it never
+/// steers toward the player afterwards.
+class Projectile {
+  Projectile({required this.kind, required this.spec, required this.source, required this.x, required this.z, required this.vx, required this.vz, required this.startElevation})
+      : fromX = x,
+        fromZ = z;
+
+  final ProjectileKind kind;
+  final ProjectileSpec spec;
+  final EnemyKind source;
+  final double fromX;
+  final double fromZ;
   double x;
   double z;
-  final double speed;
+
+  /// World units per second (constant).
+  final double vx;
+  final double vz;
+
+  /// Launch height (rendering only; it descends toward chest height at the player).
+  final double startElevation;
+  double traveled = 0;
   bool done = false;
+
+  double get speed => math.sqrt(vx * vx + vz * vz);
+
+  /// Rendering height: from the launch height down to chest height near the player.
+  double get elevation {
+    final total = math.sqrt(fromX * fromX + fromZ * fromZ);
+    final t = total <= 1e-9 ? 1.0 : (traveled / total).clamp(0.0, 1.0);
+    return startElevation + (1.2 - startElevation) * t;
+  }
 }
 
 /// Outcome of a cast, for feedback.
 enum CastResult { launched, noTargetInRange, onCooldown, locked, gameOver }
+
+/// [run]: a real run (spawning, day-night, rewards). [tutorial]: a scripted practice sandbox: no
+/// automatic spawning, no day-night cycle, no lives lost, no score and never any permanent reward.
+enum GameMode { run, tutorial }
 
 class _SlimeFamily {
   int alive = 1;
@@ -146,13 +227,26 @@ class _SlimeFamily {
 /// (time only advances through [update]), seeded randomness. Rendering, input, audio and
 /// persistence live elsewhere.
 class WizardGame implements EnemyContext {
-  WizardGame({this.config = const WizardConfig(), int? seed, Set<String> unlockedSpells = const {}})
+  WizardGame({this.config = const WizardConfig(), int? seed, Set<String> unlockedSpells = const {}, this.mode = GameMode.run})
       : random = math.Random(seed),
-        unlockedSpells = {SpellIds.fireball, ...unlockedSpells} {
+        unlockedSpells = {SpellIds.fireball, ...unlockedSpells},
+        shield = Shield(config.shield),
+        dayNight = DayNightCycle(mode == GameMode.run ? config.dayNight : const DayNightSpec(enabled: false)) {
     lives = config.startingLives;
     difficulty = DifficultyController(config);
     _spawnTimer = config.difficulty.spawnIntervalStart - config.difficulty.firstSpawnDelay;
   }
+
+  final GameMode mode;
+
+  /// The base-kit shield (always available, independent of the selected spell).
+  final Shield shield;
+  final DayNightCycle dayNight;
+
+  /// The current night's boss, from its appearance until the next day begins (so a new boss can
+  /// never start while the previous encounter is still resolving).
+  BoneLich? boss;
+  int bossesDefeated = 0;
 
   @override
   final WizardConfig config;
@@ -163,7 +257,7 @@ class WizardGame implements EnemyContext {
 
   final List<Enemy> enemies = [];
   final List<Fireball> fireballs = [];
-  final List<Arrow> arrows = [];
+  final List<Projectile> projectiles = [];
   final List<GameEvent> _events = [];
   final Map<int, _SlimeFamily> _families = {};
 
@@ -183,7 +277,7 @@ class WizardGame implements EnemyContext {
   final Map<String, double> _cooldownUntil = {};
 
   /// World aim direction (radians, 0 = straight ahead, + = right), set by the screen from the
-  /// staff/hand and head pose each frame. Used by directional spells.
+  /// staff/hand and head pose each frame. Used by directional spells and as the shield's facing.
   double aimYaw = 0;
 
   /// Seconds since the player was last hit (for damage flash), large if never.
@@ -192,6 +286,7 @@ class WizardGame implements EnemyContext {
   // ---- Difficulty (delegated to the central controller) ----
 
   double get difficultyLevel => difficulty.progress;
+  bool get rewardsEnabled => mode == GameMode.run;
   double get spawnInterval => difficulty.spawnInterval;
   int get maxEnemies => difficulty.maxEnemies;
   double get speedMultiplier => difficulty.speedMultiplier;
@@ -199,6 +294,9 @@ class WizardGame implements EnemyContext {
 
   List<Enemy> get livingEnemies => enemies.where((e) => e.isAlive).toList();
   int get activeSlimes => enemies.where((e) => e.isAlive && e is SplittingSlime).length;
+
+  /// The boss while it is alive (for the boss health bar).
+  BoneLich? get livingBoss => boss != null && boss!.isAlive ? boss : null;
 
   /// Returns and clears the events produced since the last call.
   List<GameEvent> drainEvents() {
@@ -217,21 +315,59 @@ class WizardGame implements EnemyContext {
     timeSinceHit += dt;
     if (_graceTimer > 0) _graceTimer -= dt;
     difficulty.update(elapsedSeconds: elapsed, score: score);
+    shield.yaw = aimYaw;
+    if (shield.update(dt)) _events.add(const ShieldExpired());
 
-    _updateSpawning(dt);
+    final entered = dayNight.update(dt);
+    if (entered != null) _onPhase(entered);
+    if (mode == GameMode.run && dayNight.ordinarySpawning) _updateSpawning(dt);
     for (final e in List.of(enemies)) {
       e.update(dt, this);
       if (isOver) return;
     }
     _updateFireballs(dt);
-    _updateArrows(dt);
+    _updateProjectiles(dt);
     if (isOver) return;
 
     // Cleanup: defeated enemies linger briefly for their death animation.
     enemies.removeWhere((e) =>
         e.state == EnemyState.resolved || e.state == EnemyState.split || (e.state == EnemyState.defeated && e.stateTime > 0.6));
     fireballs.removeWhere((f) => f.done);
-    arrows.removeWhere((a) => a.done);
+    projectiles.removeWhere((a) => a.done);
+  }
+
+  void _onPhase(DayPhase phase) {
+    _events.add(PhaseChanged(phase, dayNight.nights));
+    switch (phase) {
+      case DayPhase.night when boss == null:
+        _spawnBoss();
+      case DayPhase.day:
+        boss = null; // the encounter is fully resolved
+      default:
+        break;
+    }
+  }
+
+  void _spawnBoss() {
+    final b = config.boss;
+    final health = b.baseHealth * (1 + b.healthGrowthPerCycle * math.max(0, dayNight.nights - 1));
+    final lich = BoneLich(id: _nextId++, spec: config.spec(EnemyKind.boss), x: 0, z: config.spawnDistance, boss: b, health: health, night: dayNight.nights);
+    boss = lich;
+    enemies.add(lich);
+    _events.add(EnemySpawned(lich));
+    _events.add(BossAppeared(lich));
+  }
+
+  // ---- Shield ----
+
+  /// Reports the blocking pose (from the shield gesture recognizer). Returns true when this
+  /// raised the shield. Holding the pose never retriggers or extends it.
+  bool setShieldPose(bool held) {
+    if (isOver) return false;
+    shield.yaw = aimYaw;
+    final raised = shield.setPose(held);
+    if (raised) _events.add(ShieldRaised(shield.yaw));
+    return raised;
   }
 
   void _updateSpawning(double dt) {
@@ -240,13 +376,14 @@ class WizardGame implements EnemyContext {
     if (livingEnemies.length >= maxEnemies) return; // wait for room; keep the timer full
     _spawnTimer = 0;
     var kind = _pickKind();
+    assert(kind != EnemyKind.boss);
     // Respect the slime cap at spawn time too (a big slime can become several enemies).
     if (kind == EnemyKind.slime && activeSlimes + config.slime.childrenPerSplit > config.slime.maxActiveSlimes) kind = EnemyKind.troll;
     spawn(kind);
   }
 
   EnemyKind _pickKind() {
-    final kinds = EnemyKind.values;
+    const kinds = EnemyKind.spawnable;
     final weights = kinds.map(spawnWeight).toList();
     var r = random.nextDouble() * weights.reduce((a, b) => a + b);
     for (var i = 0; i < kinds.length; i++) {
@@ -324,7 +461,16 @@ class WizardGame implements EnemyContext {
     enemy.scored = true;
     enemiesDefeated++;
     var points = 0;
-    if (enemy is SplittingSlime) {
+    if (enemy is BoneLich) {
+      points = config.boss.score;
+      bossesDefeated++;
+      if (dayNight.bossDefeated()) _onPhase(DayPhase.dawn);
+      if (rewardsEnabled) {
+        _events.add(BossDefeated(enemy, points));
+        // The permanent Chain Lightning unlock: the first boss defeat in a real run.
+        if (unlockedSpells.add(SpellIds.chainLightning)) _events.add(const SpellUnlocked(SpellIds.chainLightning));
+      }
+    } else if (enemy is SplittingSlime) {
       final family = _families[enemy.familyId];
       if (family != null) {
         family.alive--;
@@ -340,12 +486,11 @@ class WizardGame implements EnemyContext {
     _events.add(EnemyDefeated(enemy, points));
   }
 
+  /// Score never unlocks anything (Chain Lightning comes from the first boss defeat). Tutorial
+  /// practice never scores.
   void _addScore(int points) {
+    if (mode == GameMode.tutorial) return;
     score += points;
-    final lightning = config.chainLightning;
-    if (score >= lightning.unlockScore && unlockedSpells.add(SpellIds.chainLightning)) {
-      _events.add(const SpellUnlocked(SpellIds.chainLightning));
-    }
   }
 
   // ---- Spells ----
@@ -507,20 +652,74 @@ class WizardGame implements EnemyContext {
     return primary;
   }
 
-  void _updateArrows(double dt) {
-    for (final a in arrows) {
-      if (a.done) continue;
-      final d = math.sqrt(a.x * a.x + a.z * a.z);
-      final step = a.speed * dt;
-      if (d <= step + 0.4) {
-        a.done = true;
-        _damagePlayer(EnemyKind.skeletonArcher, a.x, a.z);
+  /// Moves projectiles along their fixed straight paths. Per step, on the segment travelled:
+  /// 1. an active shield blocks a blockable projectile that is within [ShieldSpec.blockRadius]
+  ///    inside the shield's arc (checked first, so a block always wins over a hit);
+  /// 2. otherwise it hits the player if the segment passes within the hit radius;
+  /// 3. otherwise it is removed once it has passed the player or flown its maximum range.
+  /// Each projectile resolves exactly once.
+  void _updateProjectiles(double dt) {
+    for (final p in projectiles) {
+      if (p.done) continue;
+      final (x0, z0) = (p.x, p.z);
+      final (x1, z1) = (x0 + p.vx * dt, z0 + p.vz * dt);
+      final (closest, cx, cz) = _closestToOrigin(x0, z0, x1, z1);
+      final s = config.shield;
+      if (shield.isActive && p.spec.blockable && closest <= s.blockRadius) {
+        final (bx, bz) = _entryPoint(x0, z0, x1, z1, s.blockRadius) ?? (cx, cz);
+        if (shield.covers(bx, bz)) {
+          p
+            ..done = true
+            ..x = bx
+            ..z = bz;
+          _events.add(ProjectileBlocked(p, x: bx, z: bz));
+          continue;
+        }
+      }
+      if (closest <= config.playerHitRadius + p.spec.radius) {
+        p
+          ..done = true
+          ..x = cx
+          ..z = cz;
+        _events.add(ProjectileHitPlayer(p));
+        _damagePlayer(p.source, cx, cz);
         if (isOver) return;
         continue;
       }
-      a.x -= a.x / d * step;
-      a.z -= a.z / d * step;
+      p
+        ..x = x1
+        ..z = z1
+        ..traveled += p.speed * dt;
+      final movingAway = x1 * p.vx + z1 * p.vz > 0;
+      if (p.traveled >= p.spec.maxRange || (movingAway && math.sqrt(x1 * x1 + z1 * z1) > config.shield.blockRadius + 1)) {
+        p.done = true;
+        _events.add(ProjectileMissed(p));
+      }
     }
+  }
+
+  /// Closest point to the player (origin) on the segment a → b: (distance, x, z).
+  static (double, double, double) _closestToOrigin(double ax, double az, double bx, double bz) {
+    final dx = bx - ax, dz = bz - az;
+    final len2 = dx * dx + dz * dz;
+    final t = len2 <= 1e-12 ? 0.0 : (-(ax * dx + az * dz) / len2).clamp(0.0, 1.0);
+    final x = ax + dx * t, z = az + dz * t;
+    return (math.sqrt(x * x + z * z), x, z);
+  }
+
+  /// Where the segment a → b first comes within [radius] of the origin (a itself if already
+  /// inside), or null if it never does.
+  static (double, double)? _entryPoint(double ax, double az, double bx, double bz, double radius) {
+    if (ax * ax + az * az <= radius * radius) return (ax, az);
+    final dx = bx - ax, dz = bz - az;
+    final a = dx * dx + dz * dz;
+    final b = 2 * (ax * dx + az * dz);
+    final c = ax * ax + az * az - radius * radius;
+    final disc = b * b - 4 * a * c;
+    if (a <= 1e-12 || disc < 0) return null;
+    final t = (-b - math.sqrt(disc)) / (2 * a);
+    if (t < 0 || t > 1) return null;
+    return (ax + dx * t, az + dz * t);
   }
 
   // ---- EnemyContext ----
@@ -537,19 +736,56 @@ class WizardGame implements EnemyContext {
     _damagePlayer(attacker.kind, attacker.x, attacker.z);
   }
 
+  /// Aims ONCE, now: at the player's position (the origin) plus a random lateral error of up to
+  /// ± the difficulty-scaled aim spread, then rotated by [yawOffset]. The velocity is fixed.
   @override
-  void fireArrow(Enemy shooter) {
-    final arrow = Arrow(x: shooter.x, z: shooter.z, speed: config.archer.arrowSpeed * difficulty.arrowSpeedMultiplier);
-    arrows.add(arrow);
-    _events.add(ArrowFired(arrow, shooter));
+  void fireProjectile(Enemy shooter, ProjectileSpec spec, {double yawOffset = 0, double speedMultiplier = 1}) {
+    final d = shooter.distance;
+    if (d <= 1e-9) return;
+    final (ux, uz) = (-shooter.x / d, -shooter.z / d); // toward the player
+    final spread = difficulty.aimSpreadFor(spec);
+    final error = (random.nextDouble() * 2 - 1) * spread;
+    // Target point: the player plus the error, perpendicular to the line of fire.
+    final (tx, tz) = (uz * error, -ux * error);
+    var (dx, dz) = (tx - shooter.x, tz - shooter.z);
+    final len = math.sqrt(dx * dx + dz * dz);
+    (dx, dz) = (dx / len, dz / len);
+    if (yawOffset != 0) {
+      final (c, s) = (math.cos(yawOffset), math.sin(yawOffset));
+      (dx, dz) = (dx * c + dz * s, -dx * s + dz * c);
+    }
+    final speed = spec.speed * speedMultiplier;
+    final projectile = Projectile(
+      kind: shooter is BoneLich ? ProjectileKind.bossBolt : ProjectileKind.arrow,
+      spec: spec,
+      source: shooter.kind,
+      x: shooter.x,
+      z: shooter.z,
+      vx: dx * speed,
+      vz: dz * speed,
+      startElevation: shooter.height * 0.65 + shooter.elevation,
+    );
+    projectiles.add(projectile);
+    _events.add(ProjectileFired(projectile, shooter));
   }
 
   @override
   void attackStarted(Enemy enemy) => _events.add(EnemyAttackStarted(enemy));
 
+  @override
+  void summon(EnemyKind kind, int count, Enemy near) {
+    for (var i = 0; i < count; i++) {
+      final offset = (i - (count - 1) / 2) * 2.4;
+      final e = spawn(kind, x: (near.x + offset).clamp(-config.spawnHalfWidth, config.spawnHalfWidth));
+      e.z = near.z + 1.5;
+    }
+  }
+
+  /// The only place the player takes damage (melee strikes and projectile hits). The shield is
+  /// not consulted here: it can only stop projectiles before they arrive.
   void _damagePlayer(EnemyKind source, double x, double z) {
     if (isOver) return;
-    final lifeLost = _graceTimer <= 0;
+    final lifeLost = mode == GameMode.run && _graceTimer <= 0;
     if (lifeLost) {
       lives = math.max(0, lives - 1);
       _graceTimer = config.hitGraceSeconds;

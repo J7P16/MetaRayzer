@@ -7,12 +7,15 @@ import '../../../input/hand_input.dart';
 import '../../../input/head_pose.dart';
 import '../aim.dart';
 import '../cast_gesture.dart';
+import '../day_night.dart';
 import '../enemies.dart';
+import '../shield.dart';
 import '../wizard_config.dart';
 import '../wizard_game.dart';
 import 'arena_projection.dart';
 import 'effects.dart';
 import 'enemy_painters.dart';
+import 'health_bar.dart';
 
 /// Everything the scene painter needs for one frame.
 class WizardSceneState {
@@ -25,6 +28,18 @@ class WizardSceneState {
   HandInputFrame hand = HandInputFrame.unavailable;
   HeadView head = HeadView.none;
   bool simulated = false;
+
+  /// 0..1 how close the hand is to the shield's blocking pose (HUD hint).
+  double shieldReadiness = 0;
+
+  /// Draw the shield/day HUD chips (off for tutorial steps that don't use them).
+  bool showShieldHud = true;
+
+  /// Score, hearts, run clock and day-night chip (off in the tutorial, which has no run).
+  bool showRunHud = true;
+
+  /// Top of the warning banners (the tutorial moves them below its own top bar).
+  double bannerTop = 18;
 
   /// Seconds since the screen opened (ambient animation).
   double time = 0;
@@ -68,19 +83,27 @@ class WizardPainter extends CustomPainter {
     // Enemies far → near (by camera depth).
     final fireballTarget = game.selectedSpell == SpellIds.fireball ? _first(game.targetableEnemies()) : null;
     final sorted = List<Enemy>.of(game.enemies)..sort((a, b) => p.toCamera(b.x, b.z).$2.compareTo(p.toCamera(a.x, a.z).$2));
+    final bars = <(HealthBarModel, Offset, double, double)>[];
     for (final e in sorted) {
       if (!p.inFront(e.x, e.z)) continue;
       final feet = p.project(e.x, e.z);
       final u = p.unitsAt(e.x, e.z);
-      final fog = ((e.distance - 20) / (game.config.spawnDistance - 20)).clamp(0.0, 1.0);
-      paintEnemy(canvas, e, feet, u, opacity: 1 - 0.55 * fog, death: WizardEffects.deathProgress(e));
+      final fog = ((e.distance - 20) / (game.config.spawnDistance - 20)).clamp(0.0, 1.0) * (1 - 0.5 * _daylight);
+      _paintTelegraph(canvas, p, e, feet, u);
+      paintEnemy(canvas, e, feet, u, opacity: 1 - 0.55 * fog, death: WizardEffects.deathProgress(e), daylight: _daylight);
       if (identical(e, fireballTarget)) _paintReticle(canvas, feet - Offset(0, (e.elevation + e.height * 0.5) * u), u * e.height * 0.55, _fire);
+      if (e.isAlive && e is! BoneLich) bars.add((HealthBarModel.of(e), headAnchor(e, feet, u), u, 1 - 0.4 * fog));
     }
     _paintMist(canvas, p, behind: false);
-
-    for (final a in game.arrows) {
-      _paintArrow(canvas, p, a);
+    // Health bars after all enemies and mist, so a nearer enemy never hides a farther one's bar.
+    for (final (model, anchor, u, opacity) in bars) {
+      paintEnemyHealthBar(canvas, model, anchor, u, size, opacity: opacity);
     }
+
+    for (final a in game.projectiles) {
+      _paintProjectile(canvas, p, a);
+    }
+    _paintShield(canvas, p);
     for (final particle in fx.particles) {
       _paintWorldParticle(canvas, p, particle);
     }
@@ -106,8 +129,11 @@ class WizardPainter extends CustomPainter {
     }
     _paintDamageVignette(canvas, size, fx.damage);
     _paintHud(canvas, size);
+    _paintIncomingHint(canvas, size);
     _paintBanners(canvas, size);
   }
+
+  double get _daylight => s.game.dayNight.daylight;
 
   static Enemy? _first(List<Enemy> list) => list.isEmpty ? null : list.first;
 
@@ -277,43 +303,71 @@ class WizardPainter extends CustomPainter {
 
   // ---------------------------------------------------------------- scenery
 
+  static Color _mix(Color night, Color day, double t) => Color.lerp(night, day, t)!;
+
+  /// Sky by time of day: the night palette (stars, moon, nebulae) cross-fades through a dusky
+  /// orange into a bright day sky with a sun, following [DayNightCycle.daylight].
   void _paintSky(Canvas canvas, Size size, ArenaProjection p) {
+    final d = _daylight;
+    final dusk = math.sin(d * math.pi); // strongest halfway through dusk/dawn
     final sky = Rect.fromLTWH(-40, -40, size.width + 80, p.horizonY + 40);
     canvas.drawRect(
       sky,
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF070418), Color(0xFF221046), Color(0xFF5E2658), Color(0xFF8A3B4E)],
-          stops: [0, 0.55, 0.9, 1],
+          colors: [
+            _mix(const Color(0xFF070418), const Color(0xFF3E7FD6), d),
+            _mix(const Color(0xFF221046), const Color(0xFF7DB7EC), d),
+            Color.lerp(_mix(const Color(0xFF5E2658), const Color(0xFFC9E3F5), d), const Color(0xFFE07A4A), 0.5 * dusk)!,
+            Color.lerp(_mix(const Color(0xFF8A3B4E), const Color(0xFFF3E2B8), d), const Color(0xFFFFA45C), 0.6 * dusk)!,
+          ],
+          stops: const [0, 0.55, 0.9, 1],
         ).createShader(sky),
     );
     final shift = p.farShiftX;
     final w = size.width + 400;
     double wrap(double x) => ((x + shift) % w + w) % w - 200;
-    // Drifting nebulae.
-    for (var i = 0; i < 3; i++) {
-      final c = Offset(wrap(size.width * (0.2 + i * 0.33) + s.time * 4), p.horizonY * (0.3 + 0.2 * i));
-      final r = size.height * (0.25 + 0.05 * i);
-      canvas.drawCircle(c, r, Paint()..shader = RadialGradient(colors: [[const Color(0x2C9B5CFF), const Color(0x22FF6FA8), const Color(0x1E6CF2FF)][i], const Color(0x00000000)]).createShader(Rect.fromCircle(center: c, radius: r)));
+    final night = 1 - d;
+    if (night > 0.01) {
+      // Drifting nebulae and stars fade out with the light.
+      for (var i = 0; i < 3; i++) {
+        final c = Offset(wrap(size.width * (0.2 + i * 0.33) + s.time * 4), p.horizonY * (0.3 + 0.2 * i));
+        final r = size.height * (0.25 + 0.05 * i);
+        final color = [const Color(0x2C9B5CFF), const Color(0x22FF6FA8), const Color(0x1E6CF2FF)][i];
+        canvas.drawCircle(c, r, Paint()..shader = RadialGradient(colors: [color.withValues(alpha: color.a * night), const Color(0x00000000)]).createShader(Rect.fromCircle(center: c, radius: r)));
+      }
+      final rng = math.Random(11);
+      for (var i = 0; i < 140; i++) {
+        final pt = Offset(wrap(rng.nextDouble() * w - 200), rng.nextDouble() * p.horizonY * 0.92);
+        final twinkle = 0.4 + 0.6 * (0.5 + 0.5 * math.sin(s.time * (1 + rng.nextDouble() * 2) + i));
+        canvas.drawCircle(pt, 0.6 + rng.nextDouble(), Paint()..color = Colors.white.withValues(alpha: 0.6 * twinkle * night));
+      }
+      final moon = Offset(wrap(size.width * 0.78), p.horizonY * (0.35 + 0.4 * d));
+      canvas.drawCircle(moon, 80, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 230, 176, 0.27 * night), const Color(0x00FFE6B0)]).createShader(Rect.fromCircle(center: moon, radius: 80)));
+      canvas.drawCircle(moon, 26, Paint()..color = const Color(0xFFFFF1D0).withValues(alpha: night));
     }
-    final rng = math.Random(11);
-    for (var i = 0; i < 140; i++) {
-      final pt = Offset(wrap(rng.nextDouble() * w - 200), rng.nextDouble() * p.horizonY * 0.92);
-      final twinkle = 0.4 + 0.6 * (0.5 + 0.5 * math.sin(s.time * (1 + rng.nextDouble() * 2) + i));
-      canvas.drawCircle(pt, 0.6 + rng.nextDouble(), Paint()..color = Colors.white.withValues(alpha: 0.6 * twinkle));
+    if (d > 0.01) {
+      // The sun sinks toward the horizon at dusk and rises at dawn.
+      final sun = Offset(wrap(size.width * 0.3), p.horizonY * (0.95 - 0.7 * d));
+      canvas.drawCircle(sun, 140, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 236, 170, 0.45 * d), const Color(0x00FFE6A0)]).createShader(Rect.fromCircle(center: sun, radius: 140)));
+      canvas.drawCircle(sun, 34, Paint()..color = Color.lerp(const Color(0xFFFF9A50), const Color(0xFFFFF6D8), d)!.withValues(alpha: d));
+      // A few soft clouds.
+      for (var i = 0; i < 4; i++) {
+        final c = Offset(wrap(size.width * (0.1 + i * 0.27) + s.time * 6), p.horizonY * (0.2 + 0.12 * (i % 3)));
+        final r = Rect.fromCenter(center: c, width: size.width * 0.22, height: size.height * 0.05);
+        canvas.drawOval(r, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 255, 255, 0.5 * d), const Color(0x00FFFFFF)]).createShader(r));
+      }
     }
-    final moon = Offset(wrap(size.width * 0.78), p.horizonY * 0.35);
-    canvas.drawCircle(moon, 80, Paint()..shader = RadialGradient(colors: [const Color(0x44FFE6B0), const Color(0x00FFE6B0)]).createShader(Rect.fromCircle(center: moon, radius: 80)));
-    canvas.drawCircle(moon, 26, Paint()..color = const Color(0xFFFFF1D0));
   }
 
   /// Two mountain ridges at "infinity": they turn with the view, giving parallax against the
   /// world-placed ruins, torches and enemies (which shift by perspective).
   void _paintFarLayers(Canvas canvas, Size size, ArenaProjection p) {
     final w = size.width + 400;
-    for (final (seed, color, height) in [(5, const Color(0xFF26143F), 0.17), (9, const Color(0xFF190D2C), 0.10)]) {
+    final d = _daylight;
+    for (final (seed, color, height) in [(5, _mix(const Color(0xFF26143F), const Color(0xFF7D93B5), d), 0.17), (9, _mix(const Color(0xFF190D2C), const Color(0xFF5C7192), d), 0.10)]) {
       final r = math.Random(seed);
       final points = <(double, double)>[];
       var x = 0.0;
@@ -340,16 +394,20 @@ class WizardPainter extends CustomPainter {
     canvas.drawRect(
       ground,
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF2B1F3A), Color(0xFF3B2C3A), Color(0xFF1C1522)],
-          stops: [0, 0.35, 1],
+          colors: [
+            _mix(const Color(0xFF2B1F3A), const Color(0xFF9A9078), _daylight),
+            _mix(const Color(0xFF3B2C3A), const Color(0xFF8A7F66), _daylight),
+            _mix(const Color(0xFF1C1522), const Color(0xFF5E5644), _daylight),
+          ],
+          stops: const [0, 0.35, 1],
         ).createShader(ground),
     );
     // Flagstone grid in world space: it rotates with the view.
     final line = Paint()
-      ..color = const Color(0x2EB9A8D6)
+      ..color = _mix(const Color(0x2EB9A8D6), const Color(0x3A2E2618), _daylight)
       ..strokeWidth = 1;
     final far = s.game.config.spawnDistance + 8;
     for (var x = -16.0; x <= 16; x += 2) {
@@ -365,7 +423,7 @@ class WizardPainter extends CustomPainter {
       final u = p.unitsAt(x, z);
       final flicker = 0.85 + 0.15 * math.sin(s.time * 11 + x);
       final rect = Rect.fromCenter(center: c, width: 9 * u * flicker, height: 3.2 * u * flicker);
-      canvas.drawOval(rect, Paint()..shader = RadialGradient(colors: [const Color(0x40FF9A3D), const Color(0x00FF9A3D)]).createShader(rect));
+      canvas.drawOval(rect, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 154, 61, 0.25 * (1 - 0.7 * _daylight)), const Color(0x00FF9A3D)]).createShader(rect));
     }
   }
 
@@ -374,7 +432,7 @@ class WizardPainter extends CustomPainter {
   /// Broken pillars and an arch beyond the arena (world-placed, so they show real parallax).
   void _paintRuins(Canvas canvas, ArenaProjection p) {
     const pillars = [(-14.0, 38.0, 6.0), (-9.0, 44.0, 9.0), (-4.5, 46.0, 9.0), (5.0, 45.0, 7.0), (10.5, 41.0, 10.0), (15.0, 36.0, 5.0)];
-    final paint = Paint()..color = const Color(0xFF241634);
+    final paint = Paint()..color = _mix(const Color(0xFF241634), const Color(0xFF6E6A70), _daylight);
     for (final (x, z, h) in pillars) {
       if (!p.inFront(x, z)) continue;
       final b = p.project(x, z);
@@ -390,7 +448,7 @@ class WizardPainter extends CustomPainter {
       ..quadraticBezierTo((a.dx + b.dx) / 2, math.min(a.dy, b.dy) - (b.dx - a.dx).abs() * 0.4, b.dx, b.dy), Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(2, p.unitsAt(-7, 45) * 0.9)
-      ..color = const Color(0xFF241634));
+      ..color = paint.color);
   }
 
   void _paintPortal(Canvas canvas, ArenaProjection p) {
@@ -505,13 +563,26 @@ class WizardPainter extends CustomPainter {
     }
   }
 
-  void _paintArrow(Canvas canvas, ArenaProjection p, Arrow a) {
-    final d = math.sqrt(a.x * a.x + a.z * a.z);
-    final back = d <= 1e-6 ? 1.0 : 1 + 1.6 / d;
-    if (!p.inFront(a.x, a.z)) return;
-    final head = p.project(a.x, a.z, 1.3);
-    final tail = p.project(a.x * back, a.z * back, 1.3);
+  /// Arrows and boss bolts, drawn along their fixed flight direction (they never steer).
+  void _paintProjectile(Canvas canvas, ArenaProjection p, Projectile a) {
+    if (a.done || !p.inFront(a.x, a.z)) return;
+    final speed = a.speed;
+    if (speed <= 1e-9) return;
+    final (dx, dz) = (a.vx / speed, a.vz / speed);
+    final head = p.project(a.x, a.z, a.elevation);
     final u = p.unitsAt(a.x, a.z);
+    final pulse = 0.5 + 0.5 * math.sin(s.time * 14);
+    if (a.kind == ProjectileKind.bossBolt) {
+      final r = math.max(8.0, a.spec.radius * u);
+      for (var i = 1; i <= 5; i++) {
+        final t = p.project(a.x - dx * i * 0.5, a.z - dz * i * 0.5, a.elevation + 0.05 * i);
+        canvas.drawCircle(t, r * (1 - i * 0.14), Paint()..color = const Color(0xFF9BFFB8).withValues(alpha: 0.18 * (1 - i / 6)));
+      }
+      canvas.drawCircle(head, r * 2.4, Paint()..shader = RadialGradient(colors: [const Color(0x889BFFB8), const Color(0x009BFFB8)]).createShader(Rect.fromCircle(center: head, radius: r * 2.4)));
+      canvas.drawCircle(head, r, Paint()..shader = const RadialGradient(colors: [Color(0xFFFFFFFF), Color(0xFF9BFFB8), Color(0xFF6A3FD0)], stops: [0, 0.5, 1]).createShader(Rect.fromCircle(center: head, radius: r)));
+      return;
+    }
+    final tail = p.project(a.x - dx * 1.6, a.z - dz * 1.6, a.elevation);
     final w = math.max(3.0, 0.1 * u);
     canvas.drawLine(tail, head, Paint()
       ..color = const Color(0x55FF4040)
@@ -522,12 +593,152 @@ class WizardPainter extends CustomPainter {
       ..color = const Color(0xFFE8DCC0)
       ..strokeWidth = w
       ..strokeCap = StrokeCap.round);
+    // Fletching.
+    final back = tail - head;
+    final n = Offset(-back.dy, back.dx) / math.max(back.distance, 1) * w * 2;
+    canvas.drawLine(tail, tail + n - back * 0.12, Paint()
+      ..color = const Color(0xFFC94040)
+      ..strokeWidth = w * 0.8);
+    canvas.drawLine(tail, tail - n - back * 0.12, Paint()
+      ..color = const Color(0xFFC94040)
+      ..strokeWidth = w * 0.8);
     canvas.drawCircle(head, math.max(5.0, 0.18 * u), Paint()..color = const Color(0xFFFF3B3B));
-    final pulse = 0.5 + 0.5 * math.sin(s.time * 14);
     canvas.drawCircle(head, math.max(12.0, 0.5 * u) * (1 + 0.25 * pulse), Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5
       ..color = const Color(0xFFFF3B3B).withValues(alpha: 0.5 + 0.4 * pulse));
+  }
+
+  /// Telegraphs for ranged attacks: the intended line of fire toward the player while the
+  /// skeleton draws or the boss charges (the shot is aimed when released, so this shows intent,
+  /// not a guaranteed path), plus a ring filling over the telegraph's fixed duration.
+  void _paintTelegraph(Canvas canvas, ArenaProjection p, Enemy e, Offset feet, double u) {
+    final progress = switch (e) {
+      SkeletonArcher(:final drawProgress) => drawProgress,
+      BoneLich(:final chargeProgress) => chargeProgress,
+      _ => 0.0,
+    };
+    if (progress <= 0 || !e.isAlive) return;
+    final color = e is BoneLich ? const Color(0xFF9BFFB8) : const Color(0xFFFF4D4D);
+    final offsets = e is BoneLich && e.nextAttack == BossAttack.fan ? [-e.boss.fanAngle, 0.0, e.boss.fanAngle] : [0.0];
+    for (final off in offsets) {
+      final d = e.distance;
+      if (d <= 1e-9) continue;
+      var (dx, dz) = (-e.x / d, -e.z / d);
+      if (off != 0) (dx, dz) = (dx * math.cos(off) + dz * math.sin(off), -dx * math.sin(off) + dz * math.cos(off));
+      final from = p.project(e.x, e.z, e.height * 0.65 + e.elevation);
+      final reach = math.max(0.0, d - 2.5);
+      if (!p.inFront(e.x + dx * reach, e.z + dz * reach)) continue;
+      final to = p.project(e.x + dx * reach, e.z + dz * reach, 1.2);
+      _dashedLine(canvas, from, to, Paint()
+        ..color = color.withValues(alpha: 0.25 + 0.5 * progress)
+        ..strokeWidth = 1.5 + 2 * progress, 12, 9);
+    }
+    final top = headAnchor(e, feet, u) - const Offset(0, 36); // above the health bar
+    canvas.drawCircle(top, 11, Paint()..color = const Color(0xCC120B26));
+    canvas.drawArc(Rect.fromCircle(center: top, radius: 11), -math.pi / 2, 2 * math.pi * progress, false, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..color = color);
+    _text(canvas, '!', top, 13, Colors.white, bold: true, center: true);
+  }
+
+  /// The shield, drawn exactly where it blocks: an arc at [ShieldSpec.blockRadius] spanning
+  /// ±[ShieldSpec.halfAngle] around the shield direction. Bright while active, flashing on each
+  /// block, and fading out briefly when the window ends.
+  void _paintShield(Canvas canvas, ArenaProjection p) {
+    final shield = s.game.shield;
+    final fx = s.effects;
+    final active = shield.isActive;
+    final strength = active ? 0.55 + 0.45 * shield.activeFraction : fx.shieldFade * 0.6;
+    if (strength <= 0.01) return;
+    final spec = shield.spec;
+    const segments = 24;
+    const low = 0.15, high = 2.5;
+    final top = <Offset>[], bottom = <Offset>[];
+    for (var i = 0; i <= segments; i++) {
+      final a = shield.yaw - spec.halfAngle + 2 * spec.halfAngle * i / segments;
+      final (x, z) = (math.sin(a) * spec.blockRadius, math.cos(a) * spec.blockRadius);
+      if (!p.inFront(x, z)) return;
+      top.add(p.project(x, z, high));
+      bottom.add(p.project(x, z, low));
+    }
+    final path = Path()..moveTo(top.first.dx, top.first.dy);
+    for (final pt in top.skip(1)) {
+      path.lineTo(pt.dx, pt.dy);
+    }
+    for (final pt in bottom.reversed) {
+      path.lineTo(pt.dx, pt.dy);
+    }
+    path.close();
+    final bounds = path.getBounds();
+    final flash = math.max(fx.shieldFlash, fx.blockFlash);
+    canvas.drawPath(path, Paint()
+      ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [
+        const Color(0xFF6CF2FF).withValues(alpha: (0.10 + 0.25 * flash) * strength),
+        const Color(0xFFBFF4FF).withValues(alpha: (0.22 + 0.3 * flash) * strength),
+        const Color(0xFF6CF2FF).withValues(alpha: (0.08 + 0.2 * flash) * strength),
+      ]).createShader(bounds));
+    // Rune lattice and a bright rim (readable on both day and night skies).
+    final rune = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = const Color(0xFFE6FBFF).withValues(alpha: 0.45 * strength);
+    for (var i = 2; i < segments; i += 4) {
+      canvas.drawLine(top[i], bottom[i], rune);
+    }
+    canvas.drawPath(path, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..color = const Color(0xFF0B3A4A).withValues(alpha: 0.35 * strength));
+    canvas.drawPath(path, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5 + 2 * flash
+      ..color = Colors.white.withValues(alpha: 0.85 * strength));
+    if (active) {
+      // Remaining-time bar along the shield's lower edge.
+      final n = (segments * shield.activeFraction).round();
+      final timer = Path()..moveTo(bottom.first.dx, bottom.first.dy);
+      for (final pt in bottom.take(n + 1).skip(1)) {
+        timer.lineTo(pt.dx, pt.dy);
+      }
+      canvas.drawPath(timer, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xFF6CF2FF));
+    }
+  }
+
+  /// "Shield now!" assist: shown when a blockable projectile on a hitting course will arrive
+  /// within the next 0.9 s (computed from its fixed straight path) and the shield is ready.
+  void _paintIncomingHint(Canvas canvas, Size size) {
+    final game = s.game;
+    if (!s.showShieldHud || game.isOver) return;
+    double? soonest;
+    for (final a in game.projectiles) {
+      if (a.done || !a.spec.blockable) continue;
+      final speed = a.speed;
+      if (speed <= 1e-9) continue;
+      final along = -(a.x * a.vx + a.z * a.vz) / speed; // distance to closest approach
+      if (along <= 0) continue;
+      final cx = a.x + a.vx / speed * along, cz = a.z + a.vz / speed * along;
+      if (math.sqrt(cx * cx + cz * cz) > game.config.playerHitRadius + a.spec.radius) continue;
+      final eta = math.max(0.0, along - game.config.shield.blockRadius) / speed;
+      if (soonest == null || eta < soonest) soonest = eta;
+    }
+    if (soonest == null || soonest > 0.9) return;
+    final ready = game.shield.state == ShieldState.ready;
+    final active = game.shield.isActive;
+    final text = active ? 'BLOCKING' : (ready ? 'INCOMING · RAISE SHIELD' : 'INCOMING');
+    final color = active ? const Color(0xFF6CF2FF) : const Color(0xFFFF6B6B);
+    final pulse = 0.75 + 0.25 * math.sin(s.time * 20);
+    final tp = _layout(text, 18, Colors.black, bold: true, letterSpacing: 2);
+    // Upper middle: clear of the horizon (where shooters stand) and of the shield itself.
+    final rect = Rect.fromCenter(center: Offset(size.width / 2, size.height * 0.17), width: tp.width + 32, height: 34);
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(17)), Paint()..color = color.withValues(alpha: 0.85 * pulse));
+    tp.paint(canvas, rect.center - Offset(tp.width / 2, tp.height / 2));
   }
 
   void _paintWorldParticle(Canvas canvas, ArenaProjection p, WorldParticle q) {
@@ -669,6 +880,21 @@ class WizardPainter extends CustomPainter {
         final r = (0.4 + 1.1 * t) * u;
         canvas.drawCircle(c, r, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 255, 255, 1 - t), Color.fromRGBO(127, 231, 255, 0.7 * (1 - t)), const Color(0x007FE7FF)]).createShader(Rect.fromCircle(center: c, radius: r)));
         canvas.drawOval(Rect.fromCenter(center: ground, width: 4 * u, height: 1.3 * u), Paint()..color = _lightningCyan.withValues(alpha: 0.3 * (1 - t)));
+      case EffectKind.shieldBlock:
+        canvas.drawCircle(c, (0.3 + 1.6 * t) * u, Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = math.max(2, 0.2 * u * (1 - t))
+          ..color = const Color(0xFFBFF4FF).withValues(alpha: 1 - t));
+        final r = (0.3 + 0.8 * t) * u;
+        canvas.drawCircle(c, r, Paint()..shader = RadialGradient(colors: [Color.fromRGBO(255, 255, 255, 1 - t), Color.fromRGBO(108, 242, 255, 0.6 * (1 - t)), const Color(0x006CF2FF)]).createShader(Rect.fromCircle(center: c, radius: r)));
+      case EffectKind.bossDefeat:
+        for (var i = 0; i < 3; i++) {
+          final tt = (t - i * 0.15).clamp(0.0, 1.0);
+          canvas.drawCircle(c, (0.5 + 5 * tt) * u, Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = math.max(2, 0.3 * u * (1 - tt))
+            ..color = const Color(0xFF9BFFB8).withValues(alpha: 0.9 * (1 - tt)));
+        }
       case EffectKind.strike:
         final paint = Paint()
           ..color = const Color(0xFFFF4040).withValues(alpha: 1 - t)
@@ -691,6 +917,8 @@ class WizardPainter extends CustomPainter {
 
   void _paintHud(Canvas canvas, Size size) {
     final game = s.game;
+    if (s.showShieldHud) _paintShieldChip(canvas, size);
+    if (!s.showRunHud) return;
     _text(canvas, 'SCORE', const Offset(28, 22), 13, const Color(0xFFB9A8D6), letterSpacing: 3);
     _text(canvas, '${game.score}', const Offset(26, 38), 40, _gold, bold: true);
     final secs = game.elapsed.floor();
@@ -702,6 +930,10 @@ class WizardPainter extends CustomPainter {
     };
     _text(canvas, headText, const Offset(28, 108), 11, Colors.white.withValues(alpha: 0.45));
 
+    _paintCycleChip(canvas, size);
+    final boss = game.livingBoss;
+    if (boss != null) paintBossHealthBar(canvas, HealthBarModel.of(boss), size, boss.spec.name, charge: boss.chargeProgress);
+
     for (var i = 0; i < game.config.startingLives; i++) {
       final alive = i < game.lives;
       final pulse = (!alive && s.effects.lostHeart == i) ? s.effects.heartPulse : 0.0;
@@ -711,15 +943,59 @@ class WizardPainter extends CustomPainter {
     _text(canvas, 'Esc: leave run   ·   R: recenter head', Offset(size.width / 2, size.height - 14), 11, Colors.white.withValues(alpha: 0.35), center: true);
   }
 
+  /// Time of day, top-right under the hearts: sun/moon icon, day number and what comes next.
+  void _paintCycleChip(Canvas canvas, Size size) {
+    final cycle = s.game.dayNight;
+    if (!cycle.spec.enabled) return;
+    final night = cycle.nights;
+    final (String text, Color color) = switch (cycle.phase) {
+      DayPhase.day => ('Day ${night + 1} · night in ${cycle.dayRemaining.ceil()} s', const Color(0xFFFFD27A)),
+      DayPhase.dusk => ('Dusk · the light fades', const Color(0xFFFFA45C)),
+      DayPhase.night => ('Night $night · defeat the ${s.game.config.boss.name}', const Color(0xFF9BFFB8)),
+      DayPhase.dawn => ('Dawn', const Color(0xFFFFD27A)),
+    };
+    final c = Offset(size.width - 40 - (s.game.config.startingLives - 1) * 46 - 8, 92);
+    final d = cycle.daylight;
+    canvas.drawCircle(c, 9, Paint()..color = Color.lerp(const Color(0xFFDDE6FF), const Color(0xFFFFD27A), d)!);
+    if (d < 0.5) canvas.drawCircle(c + const Offset(4, -3), 8, Paint()..color = const Color(0xFF120B26));
+    _text(canvas, text, c + const Offset(16, -9), 13, color.withValues(alpha: 0.95), bold: true);
+  }
+
+  /// Shield status above the spell bar: always available, independent of the selected spell.
+  void _paintShieldChip(Canvas canvas, Size size) {
+    final shield = s.game.shield;
+    final (String text, Color color) = switch (shield.state) {
+      ShieldState.active => ('SHIELD UP ${(shield.remaining * 1000).round()} ms', const Color(0xFF6CF2FF)),
+      ShieldState.recharging => ('Shield · lower your hand to re-arm', const Color(0xFF8A84A0)),
+      ShieldState.ready => ('Shield ready · raise your hand upright in front of your face', const Color(0xFFBFF4FF)),
+    };
+    final tp = _layout(text, 12, color, bold: shield.isActive);
+    final rect = Rect.fromCenter(center: Offset(size.width / 2, size.height - 96), width: tp.width + 44, height: 24);
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(12)), Paint()..color = const Color(0xCC120B26));
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(12)), Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = color.withValues(alpha: 0.6));
+    // Readiness pip: fills as the hand approaches the blocking pose.
+    final pip = Offset(rect.left + 14, rect.center.dy);
+    final fill = shield.isActive ? shield.activeFraction : (shield.state == ShieldState.ready ? s.shieldReadiness : 0.0);
+    canvas.drawCircle(pip, 6, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = color);
+    canvas.drawArc(Rect.fromCircle(center: pip, radius: 6), -math.pi / 2, 2 * math.pi * fill, true, Paint()..color = color);
+    tp.paint(canvas, Offset(rect.left + 26, rect.center.dy - tp.height / 2));
+  }
+
   void _paintBanners(Canvas canvas, Size size) {
     final banners = <(String, Color)>[];
-    if (s.simulated) banners.add(('SIMULATED INPUT (dev) · mouse = hand · hold button/Space = fist · V key = V sign · arrows = head', const Color(0xFFFFC857)));
+    if (s.simulated) banners.add(('SIMULATED INPUT (dev) · mouse = hand · hold button/Space = fist · V key = V sign · B = shield · arrows = head', const Color(0xFFFFC857)));
     if (s.hand.status == HandTrackingStatus.unavailable && !s.simulated) {
       banners.add(('Hand tracking unavailable: ${s.hand.message ?? 'no camera'}', const Color(0xFFFF6B6B)));
     } else if (s.gesture.extendedDropout) {
       banners.add(("Can't see your hand. Raise your left hand into the glasses' view.", const Color(0xFFFF9F6B)));
     }
-    var y = 18.0;
+    var y = s.bannerTop;
     for (final (text, color) in banners) {
       final tp = _layout(text, 14, Colors.black, bold: true);
       final rect = Rect.fromCenter(center: Offset(size.width / 2, y + 14), width: tp.width + 28, height: 28);
@@ -729,6 +1005,13 @@ class WizardPainter extends CustomPainter {
     }
 
     final fx = s.effects;
+    if (fx.banner > 0 && fx.unlockBanner <= 0) {
+      // Quick fade in, hold, fade out over the last half second.
+      final alpha = math.min(((fx.bannerSeconds - fx.banner) * 3).clamp(0.0, 1.0), math.min(1.0, fx.banner * 2));
+      final c = Offset(size.width / 2, size.height * 0.27);
+      _text(canvas, fx.bannerTitle, c, 38, fx.bannerColor.withValues(alpha: alpha), bold: true, center: true, letterSpacing: 4);
+      _text(canvas, fx.bannerSubtitle, c + const Offset(0, 38), 16, Colors.white.withValues(alpha: 0.9 * alpha), center: true);
+    }
     if (fx.unlockBanner > 0 && fx.unlockedSpell != null) {
       final a = math.min(1.0, math.min(fx.unlockBanner, 4.5 - fx.unlockBanner) * 2);
       final c = Offset(size.width / 2, size.height * 0.3);

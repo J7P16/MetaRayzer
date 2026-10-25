@@ -3,7 +3,25 @@
 A **Flutter macOS** hand-gesture game platform driven by the camera of **Ray-Ban Meta (Gen 2)**
 glasses. Its first minigame is **Wizard's Stand**, a first-person wizard shooter. You hold a staff
 in your left hand: close the hand into a fist to ready a spell, then snap it open to cast. The
-spells are a homing **Fireball** and, once unlocked, an aimed **Chain Lightning**.
+spells are a homing **Fireball** and, once unlocked, an aimed **Chain Lightning**. A **Shield** is
+always available: raise your forearm upright in front of your face to block arrows and bolts for
+0.5 s.
+
+Version 4 adds:
+- a fix for **glasses audio** through the iPhone, with *requested* vs. *confirmed* output shown
+  separately
+- the live **glasses camera feed behind every menu**
+- polished **enemy art** and **health bars** on every enemy
+- the base-kit **Shield** and a gesture recognizer for it
+- a **Skeleton Archer** that repositions, settles, telegraphs, then fires one aimed arrow
+- an interactive, replayable **Tutorial**
+- **background music** for menus, daytime and the boss
+- a **day-night cycle** with a night **boss** (the Bone Lich)
+- **Chain Lightning** now unlocked by defeating your first boss
+- **reduced enemy auto-aim**: projectiles aim once and fly straight
+
+See the [Version 4 checklist](#version-4-checklist) for what is tested, what is only implemented,
+and what is blocked by the platform.
 
 Version 3 adds:
 - a staff that follows your hand and aims
@@ -36,6 +54,7 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 
 ## Contents
 
+0. [Version 4 checklist](#version-4-checklist)
 1. [Status: what is verified](#status-what-is-verified)
 2. [Prerequisites](#prerequisites)
 3. [Meta developer and glasses setup (manual)](#meta-developer-and-glasses-setup-manual)
@@ -57,6 +76,76 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 19. [Troubleshooting](#troubleshooting)
 20. [Known limitations and future work](#known-limitations-and-future-work)
 21. [Platform constraints and verification](#platform-constraints-and-verification)
+
+---
+
+## Version 4 checklist
+
+Built and checked on macOS 26 (Darwin 25.6) with Flutter 3.47.8. **This machine had no Xcode and no
+phone or glasses**, so neither the macOS app nor the iPhone companion was built or run for v4. All
+Dart code is covered by `flutter test` and `flutter analyze`. The shared Swift audio code was
+compiled and run offline with the Command Line Tools (`tool/audio_probe.sh`, `tool/link_selftest.sh`,
+and a `swiftc -typecheck` of the Mac `AudioController`).
+
+**Implemented and tested (automated, no hardware):**
+- Shield state machine: exactly 0.5 s, expiry, no extension or retrigger while held, re-arm after
+  release, arc coverage (`test/games/wizard_v4_test.dart`).
+- Projectiles: blocked vs. unblocked damage, block wins over hit, too-early shield, out-of-arc
+  arrows not blocked, melee never blocked, fixed velocity after launch, misses removed, each
+  resolved once.
+- Shield gesture metrics on **real Apple Vision landmarks** (upright close palm accepted; far
+  hand, sideways hand, fist and off-center hand rejected; mirroring), plus the temporal
+  recognizer (confirmation, noise, re-delivery, low confidence, dropout) (`test/input/shield_gesture_test.dart`).
+- Skeleton cycle: telegraph always precedes exactly one arrow, phases repeat, no skipped
+  telegraph at the longest frame step, nothing fired after death, reaction-time budget.
+- Reduced auto-aim: a statistical miss rate that stays above zero at full difficulty, with a
+  per-projectile floor.
+- Health bars (`HealthBarModel`): damage, damage trail, defeat, chain partial damage, split
+  slimes, boss segments.
+- Day-night cycle and boss: phase order and events, one boss per night even with long frames,
+  spawning paused at night, tougher later bosses, boss volleys (aimed + fan, fan side bolts
+  miss), one summon.
+- Chain Lightning: unlocked only by a boss defeat, exactly once, never by score, never in the
+  tutorial; v3 saves keep it; it persists across simulated restarts.
+- Tutorial: the step logic; a full widget run with simulated input (look, cast, timed shield
+  block); and that score, lives, leaderboard and progression stay untouched; exit and replay.
+- Menu camera feed: shown on the Start Menu and Settings with one shared preview, no stream
+  commands sent by navigation, stalled feed shown as *paused*, setting turns it off; mouse
+  clicks work over it.
+- Audio settings: master × channel volumes, disabled channels, music dedup, persistence.
+  Route verification: glasses confirmed only from an OS-reported route.
+- Offline audio engine (`tool/audio_probe.sh`): all 34 sounds, three seamless music loops, music
+  volume, same-track requests ignored.
+- Rendering was inspected by rendering the real painter offscreen: day, dusk with the shield, night
+  boss, every enemy type with bars, Start Menu over a camera frame, tutorial cards.
+
+**Implemented, not hardware-tested:**
+- Glasses audio via the iPhone (companion session fix, route report, route picker). The companion
+  **has not been compiled** for v4 (no Xcode here). Its changes (`CompanionAudio.swift`,
+  `CompanionApp.swift`, `ContentView.swift`) need an Xcode build.
+- The macOS plugin changes (`MetarayzerNativePlugin.swift`: music method, phone audio status) are
+  **not compiled** here (FlutterMacOS needs Xcode). `AudioController.swift` was type-checked.
+- The shield pose seen through the **glasses' own camera**. Thresholds were validated on real
+  Vision landmarks from photos and on simulated input, not on first-person glasses footage. Tune
+  them in `ShieldGestureConfig`.
+- Music and all sounds heard through the glasses (either route).
+- Live camera behind the menus with real glasses frames. It is the same `CameraPreview` widget and
+  controller as the gameplay inset, but it hasn't been run with the real stream.
+
+**Partially implemented:**
+- *Avoiding attacks by movement.* The game tracks head **orientation** only (DAT Motion has no
+  position), and the player stands at a fixed point. So arrows can be dodged only by their own aim
+  error, by facing the threat so the shield's arc covers it, and by timing. Physical sidestepping
+  is not tracked.
+- Melee enemies keep their v3 behavior (a telegraphed strike that always lands unless you kill the
+  enemy first). They have no aim to reduce; the auto-aim reduction applies to projectiles.
+
+**Blocked or limited by the platform:**
+- **Forcing audio onto the glasses.** Meta's toolkit has no audio API, and iOS doesn't let an app
+  pick a Bluetooth output device. The app can request the documented `.playback` session, show
+  iOS's route picker, and report the actual route. It cannot select the glasses itself.
+- Proving that a person *hears* the sound. Software can confirm only what the OS reports as the
+  active output.
 
 ---
 
@@ -85,6 +174,7 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 | **v3** built release app end to end: hand-dwell starts the game, exactly one cast per fist→open, relayed glasses orientation → `head tracking: tracking` → `lost` on disconnect, audio on the Mac speakers, **"Glasses via iPhone" relay** sends positioned sound events to the phone side and falls back to the Mac when it disconnects | ✅ verified with `send_frames.py --motion-yaw` standing in for the companion |
 | **v3** companion compiles with `MWDATMotion` + audio playback; motion and audio messages round-trip | ✅ build + `tool/link_selftest.sh` |
 | Full test suite | ✅ 179 Dart tests, `flutter analyze` clean, link self-test, audio probe |
+| **v4** full test suite | ✅ **243** Dart tests, `flutter analyze` clean, link self-test, audio probe (34 sounds + 3 music loops). Run with Flutter 3.47.8 on macOS 26. The macOS app and the companion were **not built** for v4 (no Xcode on the build machine). |
 | iPhone companion compiles against Meta DAT **1.0.1** (Debug and Release, `generic/platform=iOS`) | ✅ verified |
 | Companion ↔ Mac protocol (the companion's own `FrameSender` against the Mac's `FrameServer`) | ✅ verified (`tool/link_selftest.sh`) |
 | **Companion running on a physical iPhone with physical Ray-Ban Meta Gen 2 glasses** | ⚠️ **not verified.** No phone or glasses were available while building this. Needs the manual steps below. |
@@ -226,8 +316,26 @@ registration, device, permission and stream.
 Start Menu ──PLAY──▶ Wizard's Stand ──3 hits──▶ Game Over ──PLAY AGAIN──▶ Wizard's Stand
     │  ▲                   │ Esc (quit, not recorded)        └──START MENU──▶ Start Menu
     │  └───────────────────┘
+    ├──Tutorial (replay any time; Esc / Exit returns; PLAY from its last page)
     └──Settings / Glasses & tracking setup (Esc or Back returns)
 ```
+
+**Camera feed behind the menus (v4).** While the glasses stream is live, every navigation
+screen shows the live glasses view behind its panels:
+- Start Menu, Settings, Game Over and the tutorial's first and last pages
+- dimmed so text stays readable, with the hand-dot overlay
+- a dashed outline of the **hand-pointer area**, the camera region that maps to the whole window
+  for the hand cursor and the staff
+
+It uses the same `CameraPreview`, controller, fit, mirroring and rotation as the in-game inset, so
+coordinates match gameplay. It is one widget under all menu screens (`MenuBackdropHost` in
+`AppShell`), so navigating never creates a second preview or restarts the stream.
+
+States:
+- A stalled stream is dimmed and labeled *STREAM PAUSED · showing the last frame*.
+- With no stream, the normal night-sky background shows.
+- The setting **Camera view behind menus** turns it off.
+- The tracking-setup screen, the game and the tutorial's practice steps show the camera themselves.
 
 The **Start Menu** shows:
 - the title, **PLAY** and **Settings**
@@ -289,13 +397,45 @@ stays attached to the staff whichever way you look.
 
 Labels under the staff show the gesture state and **seen: fist/open/victory/unknown**.
 
+### The shield (base kit, v4)
+
+Raise your forearm **upright, close in front of your face** ("a vertical line" in the camera). The
+shield then blocks **projectiles only** (skeleton arrows, boss bolts) for **0.5 s**.
+- Holding the pose does **not** extend or retrigger it. Lower your hand and raise it again for
+  the next one (re-arm takes 0.15 s).
+- It never protects against melee blows or contact damage.
+- It covers a ±35° arc around where you aim and look, so face the threat.
+- Raising it cancels a readied spell, so a blocking hand never casts by accident.
+- Feedback: a cyan shield wall drawn exactly where it blocks, with its remaining time along the
+  bottom edge; a flash and a glassy clang on each block; a status chip (*ready / up / lower your
+  hand to re-arm*) with a pip that fills as your hand approaches the pose; and an
+  *INCOMING · RAISE SHIELD* prompt when a projectile on a hitting course is under 0.9 s away.
+
+**How the pose is detected** (`ShieldGestureRecognizer`, all thresholds in `ShieldGestureConfig`):
+from the tracked hand's geometry (`HandShape`: joint bounds, wrist→middle-knuckle axis), never a
+single landmark.
+- **Coverage:** the hand must span ≥ 45% of the *height* of a central shield region (x 0.30–0.70,
+  y 0.15–0.85 of the view), and its center must be inside the region horizontally.
+- **Closeness:** wrist→knuckle length ≥ 13% of the frame height.
+- **Upright:** within 35° of vertical, fingers up.
+- **Extended:** the hand reaches ≥ 1.5 palm lengths vertically, which rejects a fist.
+  Height/width doesn't work for this: a real upright palm with a spread thumb is about as wide
+  as it is tall.
+- **Stability:** coverage is smoothed. The pose must hold for 2 new frames to count, and looser
+  exit thresholds plus 2 failing frames release it.
+- **Fails safe:** low-confidence frames are ignored, a dropout under 250 ms changes nothing, and
+  a dropout never activates.
+
+These values are validated on real Vision landmarks and simulated input, **not yet on glasses
+footage**.
+
 **Keys:** `Q`/`Tab` switch spells · `R` recenter the head · `Esc` leave the run (not recorded).
 
 ### Playing without glasses (development)
 
 | Option | What it is |
 |---|---|
-| **Simulated input (dev)** (Start Menu) | Mouse = hand position; hold the mouse button or **Space/F** = fist; hold **V** = V sign; **arrow keys** = head turn. It goes through the same input interfaces, recognizers and game as the real inputs, is labeled **SIMULATED INPUT (dev)** on screen, and is never re-enabled on launch. |
+| **Simulated input (dev)** (Start Menu) | Mouse = hand position; hold the mouse button or **Space/F** = fist; hold **V** = V sign; hold **B** = shield blocking pose; **arrow keys** = head turn. It goes through the same input interfaces, recognizers and game as the real inputs, is labeled **SIMULATED INPUT (dev)** on screen, and is never re-enabled on launch. |
 | **Mac webcam** (Glasses & tracking setup → Source) | The real camera pipeline (Vision → classifier) on the Mac camera, badged *DEV*. |
 | `tool/send_frames.py` | Streams JPEGs into the running app over the real link. `--motion-yaw 20` also sends glasses-style orientation, to exercise head tracking. Relayed audio events are printed. |
 
@@ -309,8 +449,9 @@ change.
 
 | Spell | How it targets | Damage | Unlock |
 |---|---|---|---|
+| **Shield** (base kit) | Not a spell slot: always available, whatever spell is selected. Blocks projectiles in a ±35° arc for 0.5 s. | — | always |
 | **Fireball** (default) | **Unchanged from v2:** homes in on the nearest living enemy within 20 u, skipping enemies already doomed by fireballs in flight. Ignores the aim (with no target it flies out along the aim and fizzles). | 1 | always |
-| **Chain Lightning** | **Aimed:** the first living enemy whose distance from the aim ray is ≤ 1.4 u, within 24 u. Then it arcs to the nearest not-yet-hit enemy within **5 u** of the previous one. | 2.0, then ×0.6 per link (2.0 → 1.2 → 0.72 → 0.43); up to 4 targets / 3 jumps; 1.5 s cooldown | Score **300** in a single run, **permanently** |
+| **Chain Lightning** | **Aimed:** the first living enemy whose distance from the aim ray is ≤ 1.4 u, within 24 u. Then it arcs to the nearest not-yet-hit enemy within **5 u** of the previous one. | 2.0, then ×0.6 per link (2.0 → 1.2 → 0.72 → 0.43); up to 4 targets / 3 jumps; 1.5 s cooldown | Defeat your **first night boss**, **permanently** (v4) |
 
 Chain Lightning resolves its damage instantly, exactly once per enemy per cast (a visited set).
 Slimes split by the cast can't be chained to in the same cast. Score is awarded only for enemies
@@ -319,10 +460,17 @@ staggered zaps that follow the chain) are driven by an event describing the alre
 outcome, so effects can never apply damage. With no enemy on the path, nothing is damaged and the
 bolt fizzles along the aim.
 
-**Unlock:** the moment the run's score reaches the threshold, the game emits *SpellUnlocked* once.
-The screen shows the **CHAIN LIGHTNING UNLOCKED** banner, plays a fanfare, and writes the unlock
-to local storage. Later runs start with it available. The threshold is
-`ChainLightningSpec.unlockScore`.
+**Unlock (v4):** score no longer unlocks anything. The game emits *SpellUnlocked* once, when a
+real run's night boss (the Bone Lich) is defeated and the spell isn't already owned. The screen
+shows the **CHAIN LIGHTNING UNLOCKED** banner, plays a fanfare, and writes the unlock to local
+storage (`progression.v1`). Later runs start with it.
+- Players who unlocked it in v3 keep it: the saved unlock is loaded as before and never removed.
+- The tutorial runs in `GameMode.tutorial`, which can never emit an unlock, and its screen never
+  touches progression.
+- There is no debug path that grants it.
+
+Chain damage goes through the normal damage pipeline, so health bars, scoring and the boss's
+health all update the usual way. The shield stays in the base kit whichever spell is selected.
 
 **Switching:** hold a V sign, press **Q**/**Tab**, or click a card in the spell bar
 (bottom-center: selected spell, lock state, cooldown ring, and switch progress).
@@ -344,8 +492,70 @@ projects those same coordinates, so on-screen distance always matches gameplay d
 | **Troll** | Slow steady walk, 1.9 u/s | Club wind-up (red "!" telegraph), strikes at 2.4 u | **10** | 0.50 → 0.16 |
 | **Goblin** | Fast run with a weave, 5.2 u/s | Quick wind-up at 1.9 u | **25** | 0.12 → 0.28 |
 | **Hopping Frog** | Moves only while airborne (0.45 s hops, 0.55 s rests), random sideways shift per hop | Wind-up at 1.9 u | **20** | 0.22 → 0.18 |
-| **Skeleton Archer** | Slow walk, **stops at 14 u** (inside fireball range) | Bow draw, then a visible arrow; interval shrinks with difficulty | **30** | 0.06 → 0.20 |
-| **Splitting Slime** *(new)* | Pulsing ooze (fast stretch, slow gather), 2.2 u/s average | Wind-up at 1.9 u | **60 family bonus** | 0.10 → 0.18 |
+| **Skeleton Archer** *(v4: 2 health)* | Slow walk, **stops at 14 u** (inside fireball range) | Cycle (see below): sidestep, settle, telegraph, **one** aimed arrow, recover | **30** | 0.06 → 0.20 |
+| **Splitting Slime** | Pulsing ooze (fast stretch, slow gather), 2.2 u/s average | Wind-up at 1.9 u | **60 family bonus** | 0.10 → 0.18 |
+| **Bone Lich** *(v4 boss, night only)* | Glides in to **15 u**, hovers sideways | Telegraphed bolt volleys, alternating one aimed bolt / a fan of three; summons 2 goblins once below 50% health | **250** | never spawned by day |
+
+**Skeleton Archer cycle (`ArcherSpec`)**, a readable loop that teaches the shield:
+1. **Reposition:** a short sidestep (≤ 1.6 u, 0.9 s).
+2. **Settle:** stands still for 0.45 s.
+3. **Telegraph:** 1.1 s (shrinks with difficulty, never below 0.75 s). A distinct warning
+   sound ("incoming" pips over a bone rattle), a bow draw, glowing red eye sockets, a dashed
+   line toward you and a filling ring over its head.
+4. **Fire:** exactly **one** arrow, aimed at that moment.
+5. **Recover:** 1.3 s (scaled by difficulty), then back to step 1.
+
+Each update makes at most one phase change, so a long frame can't skip the telegraph. An arrow is
+released only on the telegraph→recover transition, and dying mid-draw fires nothing. An arrow from
+14 u reaches the shield in about 1.3 s (about 1.05 s at full difficulty, where arrows fly 1.25×
+faster), so you can see it coming and time the 0.5 s window. A test keeps telegraph + flight
+above 1.5 s at full difficulty.
+
+**Projectiles and reduced auto-aim (v4).** In v3, arrows re-steered toward the player every
+frame and always hit. Now every projectile (`ProjectileSpec`):
+- Aims **once, at release**, at your position plus a random lateral error of up to ± `aimSpread`
+  (skeleton 1.3 u, boss bolt 0.45 u).
+- The error shrinks with difficulty (× 0.8 at most) but never goes below `minAimSpread`, so later
+  waves don't return to perfect aim.
+- Flies in a **straight line** with a fixed velocity and never homes.
+- Hits only if its path passes within 0.7 u (+ its own radius) of you. Otherwise it flies past
+  and is removed.
+- Is blocked if the shield is up and the projectile reaches 2.2 u inside the shield's arc. A
+  block always wins over a hit in the same step, and each projectile resolves exactly once.
+
+Accuracy is configurable per enemy type: `ArcherSpec.arrow` and `BossSpec.bolt`.
+
+**Health bars (v4).** Every damageable enemy has a bar above its head. It is drawn after all
+enemies and the mist, so it isn't hidden, and kept on screen.
+- The bar is segmented per point of health. The missing part shows as an empty, outlined track
+  and a white damage trail drains after each hit, so it doesn't rely on color.
+- Full-health bars are quieter, and the bar disappears on defeat.
+- Split slimes each get their own bar.
+- The boss has a large top-of-screen bar with its name, `health / max` and coarser segments.
+- All bars use one model (`HealthBarModel`) and painter (`view/health_bar.dart`).
+- Telegraph icons stack above the bars.
+
+**Enemy art (v4).** Same style, more depth:
+- Gradient shading lit from the upper left, dark outlines for clear silhouettes, soft contact
+  shadows, and a rim light that turns warm by day and moonlit by night.
+- A white hit flash with a small knock-back.
+- Squash and lean during wind-ups, a raised goblin dagger, and frog spots.
+- The skeleton has a quiver, a jaw and glowing eye sockets; the slime has inner bubbles.
+- The new lich has a crown, a hood, a tattered robe and a soul orb that swells while charging.
+
+**Day-night cycle and boss (`DayNightCycle`, `DayNightSpec`, `BossSpec`).** The cycle is a state
+machine inside the simulation, so it pauses, ends and resets with the run.
+
+| Phase | Duration | What happens |
+|---|---|---|
+| **Day** | 75 s | Normal spawning under the difficulty controller. Bright sky with a sun and clouds, sunlit stone. HUD: *Day N · night in … s*. |
+| **Dusk** | 4 s | No new ordinary enemies, and existing ones keep fighting. The light fades, then *NIGHT FALLS* plus a low horn. |
+| **Night** | until the boss falls | One Bone Lich appears (*BONE LICH* banner, boss stinger, boss music). Ordinary spawning is suspended, apart from its one summon. |
+| **Dawn** | 5 s | *BONE LICH DEFEATED · Dawn breaks*, 250 points, a dawn chime, day music. Day resumes, and the encounter is cleared when the day starts. |
+
+The cycle repeats while you survive. Each later night's boss has +35% of its base health (18 → 24.3
+→ 30.6 …). Exactly one boss can exist per night, because the boss slot is only cleared when the
+next day starts, and long frames can't skip a phase. The difficulty ramp keeps running by day.
 
 **Splitting Slime rules (`SlimeSpec`):**
 - **Split:** any hit (fireball or lightning) on a big slime splits it into **2 smaller slimes**
@@ -468,6 +678,54 @@ the engine offline by rendering it without speakers:
 - the listener-turn direction
 - SFX volume
 
+**Glasses audio via the iPhone: diagnosis and fix (v4).** In v3, choosing *Glasses via iPhone
+companion* did switch the Mac to relay mode. But nothing on the phone ensured, or reported, that
+the audio actually reached the glasses:
+- The companion created its audio session **lazily on the first relayed sound**, with
+  `.playback` + `.mixWithOthers`. Meta's *Use device microphones and speakers* guide asks for
+  `.playback` with **no options** and says to check the route before assuming output is on the
+  glasses.
+- Nothing restarted audio after an **interruption**. Meta AI comes to the foreground for camera
+  permission, which interrupts the companion's session.
+- The Mac showed *"Playing on the iPhone…"* as soon as the preference was set. That was a
+  requested preference displayed as if it were a fact.
+
+v4 changes:
+- The companion configures `.playback` exactly as documented and activates it as soon as the Mac
+  starts relaying.
+- It resumes after interruptions and media-server resets.
+- It reports `AVAudioSession.currentRoute` outputs (port names and types) and a played-sound count
+  in its status. The Mac passes this to Settings.
+- The companion shows **Game audio (Mac → iPhone → glasses)** with *Playing on …* and iOS's own
+  **audio output picker** (`AVRoutePickerView`). Picking the output is the user's step; no app can
+  force a Bluetooth device.
+- Settings shows **Requested** (your choice) separately from the verdict. *Confirmed by the OS:
+  playing on the glasses* appears only when iOS (or macOS, for a Mac device) reports a Bluetooth
+  output that is recognizably the glasses. Otherwise you see *Playing, but not on the glasses*,
+  *Requested, not confirmed* or *Unavailable: fell back to this Mac*, with a hint.
+
+Every sound, the ambient bed, the menu and tutorial sounds and the music go through the same
+route. Disconnecting the phone falls back to the Mac's default output, and the music follows.
+Hardware status: **not verified** (no phone, glasses or Xcode were available for v4). See the
+[checklist](#version-4-checklist).
+
+**Music (v4).** Three procedurally synthesized, seamlessly looping tracks (`MusicSynth` in
+`SoundSynth.swift`), so there are no audio files or licensing questions:
+- **menu:** calm, 72 bpm, for every non-game screen, including the tutorial.
+- **day:** driving, 104 bpm, with light drums.
+- **night:** a tense boss ostinato, 128 bpm.
+
+How it plays:
+- Two crossfaded players (1.2 s), with stingers for nightfall, boss arrival, boss defeat and dawn.
+- Requesting the track that is already playing does nothing, both in Dart and natively, so
+  rapid state changes can't stack copies.
+- Navigating between menus doesn't restart the music. Game over fades it out, then menu music
+  returns.
+
+**Volumes (Settings → Audio):** master, music, sound effects, ambient, **Music on/off** and
+**Sound effects on/off**. The engine receives master × channel volume, and 0 for a channel that
+is off. These apply to both routes.
+
 **Output routing (Settings → Audio → Output).** Meta's camera toolkit has **no audio playback
 API**. Per Meta's docs, the glasses' speakers are reached through the **phone's** standard
 Bluetooth audio. So there are two supported ways to hear the game on the glasses:
@@ -486,7 +744,8 @@ Settings shows the active route, and has **Test: left / right / far ahead** butt
 direction by ear.
 
 **Not verified:** audio heard through actual glasses, by either path. Also unverified: whether
-iOS plays relayed audio through the glasses while DAT camera streaming is active over Bluetooth.
+iOS plays relayed audio through the glasses while DAT camera streaming is active. Meta's docs say
+camera streaming doesn't use HFP, so A2DP output should remain available.
 
 ---
 
@@ -495,10 +754,10 @@ iOS plays relayed audio through the glasses while DAT camera streaming is active
 Settings (Start Menu → **Settings**) apply immediately and are stored locally (`shared_preferences`,
 key `settings.v1`):
 - head movement sensitivity and *Invert head direction*
-- SFX volume and ambient volume
+- master, music, SFX and ambient volumes; music and sound effects on/off (v4)
 - positional mode (stereo or binaural) and output
 - hand hover-to-select time
-- camera inset
+- camera inset, and the camera view behind menus (v4)
 
 Every slider also has **− / +** buttons, so it can be adjusted by hand-hover. **Reset settings to
 defaults** affects only these.
@@ -554,6 +813,22 @@ lib/src/leaderboard/     Leaderboard (top 3, persisted)   lib/src/app/: AppServi
   | `app/progression.dart` | Permanent unlocks |
   | `ui/camera_stream_indicator.dart` | Camera-stream indicator |
   | `ui/menu/settings_screen.dart` | Settings screen |
+
+- **v4 modules:**
+
+  | Module | Role |
+  |---|---|
+  | `games/wizard/shield.dart` | Shield state machine (0.5 s window, release/re-arm, arc) |
+  | `games/wizard/shield_gesture.dart` | Blocking-pose metrics and temporal recognizer |
+  | `games/wizard/day_night.dart` | Day → dusk → night → dawn state machine |
+  | `games/wizard/enemies.dart` | `SkeletonArcher` cycle, `BoneLich` boss, per-enemy health |
+  | `games/wizard/wizard_game.dart` | Projectiles (aim once, straight flight, segment collision), boss lifecycle, boss-defeat unlock, `GameMode.tutorial` |
+  | `games/wizard/wizard_session.dart` | Input → gameplay glue shared by the run and the tutorial |
+  | `games/wizard/view/health_bar.dart` | Shared health-bar model and painter |
+  | `games/wizard/tutorial/` | Tutorial flow, screen, pose illustrations |
+  | `ui/menu_camera_backdrop.dart` | Live camera behind menus |
+  | `input/hand_input.dart` (`HandShape`) | Hand geometry for gestures, without exposing landmarks |
+  | `audio/audio_service.dart` | Music, effective volumes, `AudioRouteStatus` (requested vs. verified) |
 
 - **Native (Swift) additions:**
 
@@ -860,7 +1135,8 @@ All thresholds are in `HandTrackerConfig`.
 | Dart tests: coordinates, view mapping (incl. inverse for all fit/mirror/rotation combos), geometry, One Euro filter, tracker, controller with a fake native layer, event parsing | `flutter test` |
 | Game tests: pose classifier (synthetic + real Vision landmarks), cast state machine, all game rules, dwell selection, leaderboard/settings persistence, navigation, camera-input adapter, full app flow widget tests | `flutter test test/games test/input test/ui test/platform test/app` |
 | v3 tests: difficulty, slime, Chain Lightning, unlock, spell switch, head tracker, staff/aim, settings/progression persistence, audio dedup and event→sound positions, dwell guard, stream indicator | `flutter test test/games/wizard_v3_test.dart test/input/head_and_staff_test.dart test/audio test/ui` |
-| Spatial audio engine, offline (no speakers): all sounds synthesize, L/R placement in stereo and binaural, distance falloff, listener turn direction, volume | `tool/audio_probe.sh` |
+| v4 tests: shield, projectiles, skeleton cycle, auto-aim, health bars, day-night and boss, boss unlock, tutorial mode (`test/games/wizard_v4_test.dart`); shield gesture on real landmarks (`test/input/shield_gesture_test.dart`); volumes, music, route verification, progression (`test/audio/audio_v4_test.dart`); tutorial and menu camera widget tests (`test/app/tutorial_and_menus_test.dart`) | `flutter test test/games/wizard_v4_test.dart test/input/shield_gesture_test.dart test/audio/audio_v4_test.dart test/app/tutorial_and_menus_test.dart` |
+| Spatial audio engine, offline (no speakers): all sounds synthesize, L/R placement in stereo and binaural, distance falloff, listener turn direction, volume, and (v4) three seamless music loops, music volume, track dedup | `tool/audio_probe.sh` |
 | Static analysis | `flutter analyze` |
 | Link integration: real Mac `FrameServer` + real companion `FrameSender` over loopback; Bonjour, framing, backpressure, commands, disconnect, reconnect, corrupt input | `tool/link_selftest.sh` |
 | Detector on images (+ `--annotate DIR` overlay PNGs, `--landmarks` raw output) | `tool/vision_probe.sh img.jpg` |
@@ -905,12 +1181,23 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
 | Sound comes from the wrong side when I turn my head | Settings → **Invert head direction** (the glasses' Motion axes are undocumented). Press **R** to recenter. |
 | The view drifts or turns on its own | Press **R** (recenter), or lower the head sensitivity (0 = off). |
 | Companion shows *Head motion: unavailable* | Enable the experimental Motion capability for the app in the Wearables Developer Center, and update the glasses and Meta AI. The game still works with hand aim only. |
-| V sign doesn't switch spells | Chain Lightning must be unlocked (score 300 in a run). Hold index + middle fingers up with the others curled for about half a second; **seen: victory** should show. Q/Tab and clicking work too. |
+| V sign doesn't switch spells | Chain Lightning must be unlocked (defeat your first night boss). Hold index + middle fingers up with the others curled for about half a second; **seen: victory** should show. Q/Tab and clicking work too. |
+| Settings says *Requested: Glasses via iPhone* but *not on the glasses* | Open the companion: **Game audio** shows what iOS is playing on. Use its audio output picker (or Control Center → AirPlay) to choose the glasses. Keep the companion in the foreground. |
+| Shield never comes up | Raise the forearm **upright and close** so the hand fills the middle of the view; watch the shield chip's pip fill. Tune `ShieldGestureConfig` if your camera framing differs. In simulated input, hold **B**. |
+| Shield comes up when I just want to cast | Cast with the hand lower or farther from the face. A large, upright hand in the middle counts as blocking (and cancels the readied spell). |
+| No music | Settings → Audio: *Music: On*, music and master volume up. |
 | Reset the leaderboard / settings | `defaults delete ~/Library/Containers/com.metarayzer.metarayzer/Data/Library/Preferences/com.metarayzer.metarayzer` |
 
 ---
 
 ## Known limitations and future work
+
+- **v4 hardware status:** see the [Version 4 checklist](#version-4-checklist). The companion and the
+  Mac plugin's v4 Swift changes still need an Xcode build. Glasses audio, the shield pose through
+  the glasses camera, and the menu feed with real frames need a run on real hardware.
+- **No physical dodging:** the glasses report orientation, not position, so the player stands at
+  a fixed point. Projectiles can be avoided by their aim error, by facing them with the shield, and
+  by timing.
 
 - **Gestures through the glasses' own camera are unverified.** The fist/open classifier is
   validated on real Vision landmarks from photos and works end to end in the built app, but not yet

@@ -14,7 +14,9 @@ import CoreAudio
 /// - `.stereo` mode = equal-power panning + distance attenuation (works on any output);
 /// - `.binaural` mode = HRTF rendering (convincing on headphones; NOT head-tracked by the OS —
 ///   the listener only turns with the in-game view via [setListenerYaw]);
-/// - a separate stereo ambient loop bypasses spatialization.
+/// - a separate stereo ambient loop bypasses spatialization;
+/// - background music: two stereo players crossfaded so a track change never overlaps two
+///   copies of the same track (setMusic ignores the track that is already playing).
 ///
 /// Game coordinates (x right, z ahead, y up) map to AVAudio (x right, y up, -z ahead).
 final class SpatialAudioEngine {
@@ -30,6 +32,14 @@ final class SpatialAudioEngine {
   private let mono = AVAudioFormat(standardFormatWithSampleRate: SoundSynth.sampleRate, channels: 1)!
   private let stereo = AVAudioFormat(standardFormatWithSampleRate: SoundSynth.sampleRate, channels: 2)!
   private var ambientOn = false
+  private let musicPlayers = [AVAudioPlayerNode(), AVAudioPlayerNode()]
+  private var musicBuffers: [MusicTrack: AVAudioPCMBuffer] = [:]
+  private var activeMusicPlayer = 0
+  private(set) var musicTrack: MusicTrack?
+  private var musicVolume: Float = 0.5
+  private var musicLevels: [Float] = [0, 0]  // per-player fade level 0..1
+  private var musicFadeTimer: Timer?
+  private var musicRequest = 0
   private(set) var mode: Mode = .stereo
   private(set) var started = false
   private var configObserver: NSObjectProtocol?
@@ -48,6 +58,11 @@ final class SpatialAudioEngine {
     }
     engine.connect(environment, to: engine.mainMixerNode, format: stereo)
     engine.connect(ambientPlayer, to: engine.mainMixerNode, format: stereo)
+    for p in musicPlayers {
+      engine.attach(p)
+      engine.connect(p, to: engine.mainMixerNode, format: stereo)
+      p.volume = 0
+    }
 
     let d = environment.distanceAttenuationParameters
     d.distanceAttenuationModel = .inverse
@@ -81,6 +96,15 @@ final class SpatialAudioEngine {
     try engine.start()
     started = true
     if ambientOn { startAmbient() }
+    // Players stop with the engine (e.g. after an output-route change): resume the music.
+    if let track = musicTrack, let buffer = musicBuffers[track] {
+      let p = musicPlayers[activeMusicPlayer]
+      p.stop()
+      p.scheduleBuffer(buffer, at: nil, options: .loops)
+      p.play()
+      musicLevels[activeMusicPlayer] = 1
+      applyMusicVolumes()
+    }
   }
 
   func stop() {
@@ -129,6 +153,79 @@ final class SpatialAudioEngine {
     v.play()
   }
 
+  func setMusicVolume(_ volume: Float) {
+    musicVolume = max(0, min(1, volume))
+    applyMusicVolumes()
+  }
+
+  private func applyMusicVolumes() {
+    for (i, p) in musicPlayers.enumerated() { p.volume = musicLevels[i] * musicVolume }
+  }
+
+  /// The (cached) loop for [track]; synthesized on first use.
+  func musicBuffer(_ track: MusicTrack) -> AVAudioPCMBuffer {
+    if let b = musicBuffers[track] { return b }
+    let b = SoundSynth.music(track, format: stereo)
+    musicBuffers[track] = b
+    return b
+  }
+
+  /// Crossfades to [track] over [fade] seconds, or fades out (nil). Requests for the track
+  /// already playing are ignored. Call on the main thread; with [synchronous] false a track's
+  /// first synthesis runs on a background queue and the latest request wins.
+  func setMusic(_ track: MusicTrack?, fade: Double = 1.2, synchronous: Bool = false) {
+    guard track != musicTrack else { return }
+    musicTrack = track
+    musicRequest += 1
+    let request = musicRequest
+    guard let track else { return crossfade(to: nil, fade: fade) }
+    if musicBuffers[track] != nil || synchronous {
+      crossfade(to: musicBuffer(track), fade: fade)
+      return
+    }
+    let format = stereo
+    DispatchQueue.global(qos: .userInitiated).async {
+      let buffer = SoundSynth.music(track, format: format)
+      DispatchQueue.main.async {
+        self.musicBuffers[track] = buffer
+        if request == self.musicRequest { self.crossfade(to: buffer, fade: fade) }
+      }
+    }
+  }
+
+  private func crossfade(to buffer: AVAudioPCMBuffer?, fade: Double) {
+    let outgoing = activeMusicPlayer
+    let incoming = 1 - outgoing
+    if let buffer, started {
+      let p = musicPlayers[incoming]
+      p.stop()
+      p.scheduleBuffer(buffer, at: nil, options: .loops)
+      p.play()
+      musicLevels[incoming] = 0
+      activeMusicPlayer = incoming
+    }
+    musicFadeTimer?.invalidate()
+    let target: [Float] = buffer == nil ? [0, 0] : (incoming == 0 ? [1, 0] : [0, 1])
+    if fade <= 0 {
+      musicLevels = target
+      applyMusicVolumes()
+      for (i, p) in musicPlayers.enumerated() where target[i] == 0 { p.stop() }
+      return
+    }
+    let start = musicLevels
+    let began = Date()
+    musicFadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+      guard let self else { return timer.invalidate() }
+      let k = Float(min(1, Date().timeIntervalSince(began) / fade))
+      for i in 0..<2 { self.musicLevels[i] = start[i] + (target[i] - start[i]) * k }
+      self.applyMusicVolumes()
+      if k >= 1 {
+        timer.invalidate()
+        for (i, p) in self.musicPlayers.enumerated() where target[i] == 0 { p.stop() }
+      }
+    }
+  }
+
   func setAmbient(_ on: Bool) {
     ambientOn = on
     if on { startAmbient() } else { ambientPlayer.stop() }
@@ -151,6 +248,15 @@ final class SpatialAudioEngine {
       if status != noErr { NSLog("[MetaRayzer] could not select audio device \(id): \(status)") }
     }
     if wasStarted { restart() }
+  }
+
+  /// The CoreAudio device the engine is actually bound to (to verify a requested route).
+  func currentOutputDevice() -> AudioDeviceID? {
+    guard let unit = engine.outputNode.audioUnit else { return nil }
+    var id = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, &size)
+    return status == noErr && id != 0 ? id : nil
   }
   #endif
 }

@@ -130,26 +130,39 @@ class _AudioSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = services.settings;
     final audio = services.audio;
-    final route = audio.route;
     final options = <String, String>{
       AudioOutputChoice.auto: 'Auto (glasses if connected to this Mac)',
       AudioOutputChoice.system: 'Mac system default',
       AudioOutputChoice.companion: 'Glasses via iPhone companion',
       for (final d in audio.outputDevices) d['uid'] as String: '${d['name']}${d['bluetooth'] == true ? ' (Bluetooth)' : ''}',
     };
-    final routeLine = switch (route['kind']) {
-      'companion' => 'Playing on the iPhone (its current route; the glasses when they are its Bluetooth audio).',
-      'device' => 'Playing on ${route['name']}.',
-      'mac' => 'Playing on ${route['name']}.',
-      'fallback' => 'Playing on ${route['name']}. ${route['note'] ?? ''}',
-      _ => 'Starting audio…',
+    final requested = options[settings.audioOutput] ?? options[AudioOutputChoice.auto]!;
+    final status = audio.routeStatus;
+    final (IconData icon, Color color, String verdict) = switch (status.verification) {
+      RouteVerification.glassesConfirmed => (Icons.check_circle, Fantasy.ok, 'Confirmed by the OS: playing on the glasses'),
+      RouteVerification.otherConfirmed => (Icons.info_outline, Fantasy.warn, 'Playing, but not on the glasses'),
+      RouteVerification.unconfirmed => (Icons.help_outline, Fantasy.warn, 'Requested, not confirmed'),
+      RouteVerification.fallback => (Icons.warning_amber, Fantasy.bad, 'Unavailable: fell back to this Mac'),
+      RouteVerification.starting => (Icons.hourglass_empty, Fantasy.mist, 'Starting audio…'),
     };
     String pct(double v) => '${(v * 100).round()}%';
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('AUDIO', style: Fantasy.label),
       const SizedBox(height: 10),
+      _Stepper(label: 'Master volume', value: settings.masterVolume, min: 0, max: 1, step: 0.05, format: pct, onChanged: (v) => settings.masterVolume = v),
+      _Stepper(label: 'Music volume', value: settings.musicVolume, min: 0, max: 1, step: 0.05, format: pct, onChanged: (v) => settings.musicVolume = v),
       _Stepper(label: 'Sound effects volume', value: settings.sfxVolume, min: 0, max: 1, step: 0.05, format: pct, onChanged: (v) => settings.sfxVolume = v),
       _Stepper(label: 'Ambient volume', value: settings.ambientVolume, min: 0, max: 1, step: 0.05, format: pct, onChanged: (v) => settings.ambientVolume = v),
+      Row(children: [
+        Expanded(child: Text('Music', style: Fantasy.body)),
+        FantasyChoice<bool>(options: const {true: 'On', false: 'Off'}, selected: settings.musicEnabled, onSelected: (v) => settings.musicEnabled = v),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: Text('Sound effects', style: Fantasy.body)),
+        FantasyChoice<bool>(options: const {true: 'On', false: 'Off'}, selected: settings.sfxEnabled, onSelected: (v) => settings.sfxEnabled = v),
+      ]),
+      const SizedBox(height: 12),
       Text('Positional sound', style: Fantasy.body),
       const SizedBox(height: 6),
       FantasyChoice<SpatialMode>(
@@ -161,8 +174,27 @@ class _AudioSection extends StatelessWidget {
       Text('Output', style: Fantasy.body),
       const SizedBox(height: 6),
       FantasyChoice<String>(options: options, selected: options.containsKey(settings.audioOutput) ? settings.audioOutput : AudioOutputChoice.auto, onSelected: (v) => settings.audioOutput = v),
-      const SizedBox(height: 8),
-      Text(routeLine, style: Fantasy.body.copyWith(fontSize: 13)),
+      const SizedBox(height: 10),
+      // Requested vs. verified: the glasses are only reported as active when the OS that plays
+      // the audio says so.
+      DecoratedBox(
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.6))),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Requested: $requested', style: Fantasy.body.copyWith(fontSize: 13, color: Fantasy.mist)),
+            const SizedBox(height: 4),
+            Row(children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Expanded(child: Text(verdict, style: Fantasy.body.copyWith(fontSize: 13, color: color, fontWeight: FontWeight.w700))),
+            ]),
+            const SizedBox(height: 2),
+            Text('Active output: ${status.active}${status.phonePlayed != null ? ' · ${status.phonePlayed} sounds played on the iPhone' : ''}', style: Fantasy.body.copyWith(fontSize: 13)),
+            if (status.hint != null) ...[const SizedBox(height: 4), Text(status.hint!, style: Fantasy.body.copyWith(fontSize: 12, color: Fantasy.mist))],
+          ]),
+        ),
+      ),
       const SizedBox(height: 10),
       Wrap(spacing: 8, runSpacing: 8, children: [
         FantasyButton(label: 'Test: left', icon: Icons.volume_up, compact: true, onPressed: () => audio.play(Sounds.zap, x: -6, z: 4)),
@@ -197,13 +229,18 @@ class _MenuSection extends StatelessWidget {
         Expanded(child: Text('Camera view in game', style: Fantasy.body)),
         FantasyChoice<bool>(options: const {true: 'Show', false: 'Hide'}, selected: settings.showCameraInset, onSelected: (v) => settings.showCameraInset = v),
       ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: Text('Camera view behind menus', style: Fantasy.body)),
+        FantasyChoice<bool>(options: const {true: 'Show', false: 'Hide'}, selected: settings.showMenuCamera, onSelected: (v) => settings.showMenuCamera = v),
+      ]),
       const SizedBox(height: 18),
       Text('PROGRESSION', style: Fantasy.label),
       const SizedBox(height: 8),
       Text(
         lightning
             ? 'Chain Lightning: unlocked (permanent)'
-            : 'Chain Lightning: locked — score ${const ChainLightningSpec().unlockScore} in a single run to unlock it forever.',
+            : 'Chain Lightning: locked — defeat your first night boss in a run to unlock it forever.',
         style: Fantasy.body.copyWith(color: lightning ? Fantasy.ok : Fantasy.parchment),
       ),
       const SizedBox(height: 18),

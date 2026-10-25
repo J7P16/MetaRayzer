@@ -40,15 +40,20 @@ final class CompanionModel {
       link.send(frame: frame)
       Task { @MainActor in glasses.showPreview(image) }
     }
-    glasses.onStatusChange = { [weak glasses, weak link] in
-      guard let glasses, let link else { return }
-      link.sendStatus(glasses.statusSnapshot())
+    let audio = audio
+    // One status message carries the glasses state and the phone's actual audio output.
+    let status = { [weak glasses] () -> [String: Any] in
+      var s = glasses?.statusSnapshot() ?? [:]
+      s["audio"] = audio.statusSnapshot()
+      return s
     }
+    glasses.onStatusChange = { [weak link] in link?.sendStatus(status()) }
+    audio.onChange = { [weak link] in link?.sendStatus(status()) }
     glasses.onMotion = { qx, qy, qz, qw, t in
       link.send(motion: MotionMessage(qx: qx, qy: qy, qz: qz, qw: qw, timestampNs: t))
     }
-    link.onAudio = { [audio] message in audio.handle(message) }
-    link.statusProvider = { [weak glasses] in glasses?.statusSnapshot() ?? [:] }
+    link.onAudio = { message in audio.handle(message) }
+    link.statusProvider = status
     link.onCommand = { [weak glasses] cmd in
       switch cmd {
       case "startStream": glasses?.startStream(userInitiated: false)

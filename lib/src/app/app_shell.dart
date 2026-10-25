@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../games/wizard/tutorial/tutorial_screen.dart';
 import '../platform/app_navigator.dart';
 import '../platform/minigame.dart';
 import '../ui/dwell/dwell_scope.dart';
 import '../ui/camera_stream_indicator.dart';
+import '../ui/menu_camera_backdrop.dart';
 import '../ui/home_page.dart';
 import '../ui/menu/fantasy_theme.dart';
 import '../ui/menu/game_over_screen.dart';
@@ -46,7 +48,7 @@ class _AppShellState extends State<AppShell> {
         s.navigator.quitRun();
         return true;
       }
-      if (route is SetupRoute || route is SettingsRoute) {
+      if (route is SetupRoute || route is SettingsRoute || route is TutorialRoute) {
         s.navigator.openStartMenu();
         return true;
       }
@@ -96,9 +98,15 @@ class _AppShellState extends State<AppShell> {
                 onHoverStart: s.audio.uiHover,
                 onActivated: s.audio.uiSelect,
                 child: Stack(fit: StackFit.expand, children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 350),
-                    child: KeyedSubtree(key: ValueKey(_routeKey(route)), child: _screenFor(route)),
+                  // The live glasses view behind every menu screen (one shared stream; screen
+                  // transitions never restart it). Gameplay, the tutorial and the setup screen
+                  // show the camera themselves.
+                  MenuBackdropHost(
+                    allowed: route is! PlayingRoute && route is! TutorialRoute && route is! SetupRoute,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 350),
+                      child: KeyedSubtree(key: ValueKey(_routeKey(route)), child: _screenFor(route)),
+                    ),
                   ),
                   if (route is! PlayingRoute) Positioned(top: 10, right: 16, child: CameraStreamIndicator(tracking: s.tracking)),
                 ]),
@@ -116,22 +124,23 @@ class _AppShellState extends State<AppShell> {
         _ => route.runtimeType,
       };
 
+  MinigameHost _host(String runId) => MinigameHost(
+        handInput: s.handInput,
+        headInput: s.headInput,
+        audio: s.audio,
+        progression: s.progression,
+        settings: s.settings,
+        tracking: s.tracking,
+        runId: runId,
+        onFinished: s.navigator.finishRun,
+        onQuit: s.navigator.quitRun,
+      );
+
   Widget _screenFor(AppRoute route) => switch (route) {
         StartMenuRoute() => const StartMenu(),
-        PlayingRoute(:final game, :final runId) => game.builder(
-            context,
-            MinigameHost(
-              handInput: s.handInput,
-              headInput: s.headInput,
-              audio: s.audio,
-              progression: s.progression,
-              settings: s.settings,
-              tracking: s.tracking,
-              runId: runId,
-              onFinished: s.navigator.finishRun,
-              onQuit: s.navigator.quitRun,
-            ),
-          ),
+        PlayingRoute(:final game, :final runId) => game.builder(context, _host(runId)),
+        // The tutorial gets a host whose results go nowhere: it never finishes a run.
+        TutorialRoute() => WizardTutorialScreen(host: _host('tutorial'), onPlay: s.navigator.playDefault, onExit: s.navigator.openStartMenu),
         GameOverRoute() => GameOverScreen(route: route),
         SetupRoute() => _SetupScreen(services: s),
         SettingsRoute() => const SettingsScreen(),

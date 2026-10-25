@@ -23,7 +23,8 @@ abstract final class AudioOutputChoice {
   static const system = 'system';
 
   /// Relay sound events to the iPhone companion, which plays them on its current audio route
-  /// (the glasses when they are the phone's Bluetooth audio device).
+  /// (the glasses when they are the phone's Bluetooth audio device). The companion reports that
+  /// route back, so the app can tell a requested route from a confirmed one.
   static const companion = 'companion';
   // Any other value is a specific macOS output device UID.
 }
@@ -45,16 +46,23 @@ class AppSettings extends ChangeNotifier {
   static const double maxHeadSensitivity = 2.0;
   static const double defaultHeadSensitivity = 1.0;
 
+  static const double defaultMasterVolume = 1.0;
   static const double defaultSfxVolume = 0.8;
   static const double defaultAmbientVolume = 0.45;
+  static const double defaultMusicVolume = 0.5;
 
   double _dwellSeconds = defaultDwellSeconds;
   bool _simulatedInput = false;
   bool _showCameraInset = true;
   double _headSensitivity = defaultHeadSensitivity;
   bool _invertHeadYaw = false;
+  double _masterVolume = defaultMasterVolume;
   double _sfxVolume = defaultSfxVolume;
   double _ambientVolume = defaultAmbientVolume;
+  double _musicVolume = defaultMusicVolume;
+  bool _sfxEnabled = true;
+  bool _musicEnabled = true;
+  bool _showMenuCamera = true;
   SpatialMode _spatialMode = SpatialMode.stereo;
   String _audioOutput = AudioOutputChoice.auto;
 
@@ -68,8 +76,22 @@ class AppSettings extends ChangeNotifier {
   /// Flips the measured head yaw, for glasses whose orientation axes turn out mirrored (the
   /// Motion API's axis convention is not documented).
   bool get invertHeadYaw => _invertHeadYaw;
+  double get masterVolume => _masterVolume;
   double get sfxVolume => _sfxVolume;
   double get ambientVolume => _ambientVolume;
+  double get musicVolume => _musicVolume;
+
+  /// Sound effects (and the ambient bed) on/off.
+  bool get sfxEnabled => _sfxEnabled;
+  bool get musicEnabled => _musicEnabled;
+
+  /// Show the live glasses camera feed behind the menus while it is streaming.
+  bool get showMenuCamera => _showMenuCamera;
+
+  /// What actually reaches the engine: master × channel volume, 0 when the channel is off.
+  double get effectiveSfxVolume => _sfxEnabled ? _round(_masterVolume * _sfxVolume) : 0;
+  double get effectiveAmbientVolume => _sfxEnabled ? _round(_masterVolume * _ambientVolume) : 0;
+  double get effectiveMusicVolume => _musicEnabled ? _round(_masterVolume * _musicVolume) : 0;
   SpatialMode get spatialMode => _spatialMode;
   String get audioOutput => _audioOutput;
 
@@ -78,8 +100,13 @@ class AppSettings extends ChangeNotifier {
   set showCameraInset(bool v) => _set(() => _showCameraInset = v);
   set headSensitivity(double v) => _set(() => _headSensitivity = _round(v.clamp(minHeadSensitivity, maxHeadSensitivity)));
   set invertHeadYaw(bool v) => _set(() => _invertHeadYaw = v);
+  set masterVolume(double v) => _set(() => _masterVolume = _round(v.clamp(0.0, 1.0)));
   set sfxVolume(double v) => _set(() => _sfxVolume = _round(v.clamp(0.0, 1.0)));
   set ambientVolume(double v) => _set(() => _ambientVolume = _round(v.clamp(0.0, 1.0)));
+  set musicVolume(double v) => _set(() => _musicVolume = _round(v.clamp(0.0, 1.0)));
+  set sfxEnabled(bool v) => _set(() => _sfxEnabled = v);
+  set musicEnabled(bool v) => _set(() => _musicEnabled = v);
+  set showMenuCamera(bool v) => _set(() => _showMenuCamera = v);
   set spatialMode(SpatialMode v) => _set(() => _spatialMode = v);
   set audioOutput(String v) => _set(() => _audioOutput = v);
 
@@ -91,8 +118,13 @@ class AppSettings extends ChangeNotifier {
         _showCameraInset = true;
         _headSensitivity = defaultHeadSensitivity;
         _invertHeadYaw = false;
+        _masterVolume = defaultMasterVolume;
         _sfxVolume = defaultSfxVolume;
         _ambientVolume = defaultAmbientVolume;
+        _musicVolume = defaultMusicVolume;
+        _sfxEnabled = true;
+        _musicEnabled = true;
+        _showMenuCamera = true;
         _spatialMode = SpatialMode.stereo;
         _audioOutput = AudioOutputChoice.auto;
       });
@@ -113,8 +145,13 @@ class AppSettings extends ChangeNotifier {
       _showCameraInset = m['showCameraInset'] as bool? ?? _showCameraInset;
       _headSensitivity = number('headSensitivity', _headSensitivity, minHeadSensitivity, maxHeadSensitivity);
       _invertHeadYaw = m['invertHeadYaw'] as bool? ?? _invertHeadYaw;
+      _masterVolume = number('masterVolume', _masterVolume, 0, 1);
       _sfxVolume = number('sfxVolume', _sfxVolume, 0, 1);
       _ambientVolume = number('ambientVolume', _ambientVolume, 0, 1);
+      _musicVolume = number('musicVolume', _musicVolume, 0, 1);
+      _sfxEnabled = m['sfxEnabled'] as bool? ?? _sfxEnabled;
+      _musicEnabled = m['musicEnabled'] as bool? ?? _musicEnabled;
+      _showMenuCamera = m['showMenuCamera'] as bool? ?? _showMenuCamera;
       _spatialMode = SpatialMode.values.asNameMap()[m['spatialMode']] ?? _spatialMode;
       _audioOutput = m['audioOutput'] as String? ?? _audioOutput;
       // v2 keys (uiControlMode, handPreference) are ignored: both navigation methods are always
@@ -132,8 +169,13 @@ class AppSettings extends ChangeNotifier {
           'showCameraInset': _showCameraInset,
           'headSensitivity': _headSensitivity,
           'invertHeadYaw': _invertHeadYaw,
+          'masterVolume': _masterVolume,
           'sfxVolume': _sfxVolume,
           'ambientVolume': _ambientVolume,
+          'musicVolume': _musicVolume,
+          'sfxEnabled': _sfxEnabled,
+          'musicEnabled': _musicEnabled,
+          'showMenuCamera': _showMenuCamera,
           'spatialMode': _spatialMode.name,
           'audioOutput': _audioOutput,
         }),

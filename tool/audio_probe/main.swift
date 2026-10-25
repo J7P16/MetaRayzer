@@ -88,5 +88,46 @@ let loud = render(mode: .stereo) { a in
 }
 check(loud.0 > quiet.0 * 20, "SFX volume scales output (\(db(quiet.0)) at 0.1 vs \(db(loud.0)) at 1.0)")
 
+// 5. Background music: every track synthesizes, is audible, unclipped and loops seamlessly.
+let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: SoundSynth.sampleRate, channels: 2)!
+for track in MusicTrack.allCases {
+  let started = Date()
+  let b = SoundSynth.music(track, format: stereoFormat)
+  let ms = Date().timeIntervalSince(started) * 1000
+  let n = Int(b.frameLength)
+  let l = UnsafeBufferPointer(start: b.floatChannelData![0], count: n)
+  let peak = l.map(abs).max() ?? 0
+  let rms = sqrt(l.reduce(0) { $0 + Double($1 * $1) } / Double(max(n, 1)))
+  // Seam: the jump from the last sample to the first is no bigger than typical sample steps.
+  var maxStep: Float = 0
+  for i in 1..<n { maxStep = max(maxStep, abs(l[i] - l[i - 1])) }
+  let seam = abs(l[0] - l[n - 1])
+  check(n > 0 && peak > 0.05 && peak <= 0.95 && rms > 0.01, "music '\(track.rawValue)' synthesizes (\(String(format: "%.1f", Double(n) / SoundSynth.sampleRate)) s loop, peak \(String(format: "%.2f", peak)), \(Int(ms)) ms)")
+  check(seam <= maxStep * 1.01, "music '\(track.rawValue)' loops without a seam (end→start step \(String(format: "%.4f", seam)) ≤ max step \(String(format: "%.4f", maxStep)))")
+}
+
+// 6. Music plays through the engine, follows its volume, and re-requesting a track is a no-op.
+let musicOn = render(mode: .stereo, seconds: 1.0) { a in
+  a.setVolumes(sfx: 0, ambient: 0)
+  a.setMusicVolume(1)
+  a.setMusic(.day, fade: 0, synchronous: true)
+}
+let musicQuiet = render(mode: .stereo, seconds: 1.0) { a in
+  a.setVolumes(sfx: 0, ambient: 0)
+  a.setMusicVolume(0.1)
+  a.setMusic(.day, fade: 0, synchronous: true)
+}
+let musicOff = render(mode: .stereo, seconds: 1.0) { a in
+  a.setVolumes(sfx: 0, ambient: 0)
+  a.setMusicVolume(0)
+  a.setMusic(.day, fade: 0, synchronous: true)
+}
+check(musicOn.0 > 1e-3 && musicOn.0 > musicQuiet.0 * 20, "music plays and follows the music volume (\(db(musicQuiet.0)) at 0.1 vs \(db(musicOn.0)) at 1.0)")
+check(musicOff.0 < 1e-9, "music volume 0 is silent (\(db(musicOff.0)))")
+let dedup = SpatialAudioEngine()
+dedup.setMusic(.night, fade: 0, synchronous: true)
+dedup.setMusic(.night, fade: 0, synchronous: true)
+check(dedup.musicTrack == .night, "re-requesting the playing track keeps it (no restart, no second copy)")
+
 print(failures == 0 ? "\nALL AUDIO CHECKS PASSED" : "\n\(failures) AUDIO CHECK(S) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../dwell/dwell_scope.dart';
+import '../menu_camera_backdrop.dart';
 
 /// Shared look for the menus: night-sky purples, parchment text, gold trim.
 abstract final class Fantasy {
@@ -41,13 +42,25 @@ abstract final class Fantasy {
   );
 }
 
-/// Starry night background with a glowing horizon, shared by all menu screens.
+/// Starry night background with a glowing horizon, shared by all menu screens. While the live
+/// glasses camera shows behind the menus ([MenuBackdropScope]), it becomes a light translucent
+/// tint so the player sees the same view the game uses.
 class FantasyBackground extends StatelessWidget {
   const FantasyBackground({super.key, required this.child});
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(painter: _SkyPainter(), child: child);
+  Widget build(BuildContext context) {
+    if (MenuBackdropScope.activeOf(context)) {
+      return DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x660B0720), Color(0x22231343), Color(0x554A1F4F)]),
+        ),
+        child: child,
+      );
+    }
+    return CustomPaint(painter: _SkyPainter(), child: child);
+  }
 }
 
 class _SkyPainter extends CustomPainter {

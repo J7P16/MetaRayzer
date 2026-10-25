@@ -12,6 +12,12 @@ import Foundation
 ///   are the phone's Bluetooth audio device. Falls back to the Mac default while no phone is
 ///   connected.
 /// - any other value: a specific CoreAudio device UID (falls back to default if it disappears).
+///
+/// Verification: the route reported to Dart separates what was requested from what is
+/// verifiably active. For a Mac device it includes whether the engine is actually bound to it
+/// (`bound`); for the iPhone route it includes the output the phone's AVAudioSession reports
+/// (`phone`, relayed in the companion's status), so the app never claims "playing on the
+/// glasses" from the preference alone. Music and every sound follow the same route.
 /// Main thread only.
 final class AudioController {
   private let engine = SpatialAudioEngine()
@@ -27,6 +33,12 @@ final class AudioController {
   private var choice = "auto"
   private var sfx: Float = 0.8
   private var ambient: Float = 0.45
+  private var musicVolume: Float = 0.5
+  private var musicTrack: MusicTrack?
+  /// Audio status the companion reports (its engine state and AVAudioSession outputs).
+  var companionAudio: [String: Any]? {
+    didSet { if relaying { publishRoute() } }
+  }
   private var mode: SpatialAudioEngine.Mode = .stereo
   private var ambientOn = false
   private var yaw: Float = 0
@@ -48,6 +60,7 @@ final class AudioController {
   func configure(_ args: [String: Any]) {
     if let v = args["sfx"] as? Double { sfx = Float(v) }
     if let v = args["ambient"] as? Double { ambient = Float(v) }
+    if let v = args["music"] as? Double { musicVolume = Float(v) }
     if let v = args["mode"] as? String, let m = SpatialAudioEngine.Mode(rawValue: v) { mode = m }
     if let v = args["ambientOn"] as? Bool { ambientOn = v }
     if let v = args["output"] as? String { choice = v }
@@ -65,6 +78,18 @@ final class AudioController {
       relay?(["op": "play", "s": name, "x": x, "y": y, "z": z, "g": gain, "p": positional])
     } else {
       engine.play(id, x: x, y: y, z: z, gain: gain, positional: positional)
+    }
+  }
+
+  /// Background music: the same route as every other sound.
+  func setMusic(_ name: String?) {
+    let track = name.flatMap(MusicTrack.init(rawValue:))
+    guard track != musicTrack else { return }
+    musicTrack = track
+    if relaying {
+      relay?(["op": "music", "track": track.map { $0.rawValue as Any } ?? NSNull()])
+    } else {
+      engine.setMusic(track)
     }
   }
 
@@ -118,29 +143,53 @@ final class AudioController {
 
     let shouldRelay = kind == "companion"
     if relaying && !shouldRelay {
-      relay?(["op": "config", "ambient": false]) // silence the phone when leaving relay mode
+      // Silence the phone when leaving relay mode, and bring the music back to the Mac.
+      relay?(["op": "config", "ambient": false])
+      relay?(["op": "music", "track": NSNull()])
+      engine.setMusic(musicTrack, fade: 0.4)
+    }
+    if !relaying && shouldRelay {
+      engine.setMusic(nil, fade: 0.3)
     }
     relaying = shouldRelay
     if shouldRelay {
       engine.setVolumes(sfx: 0, ambient: 0)
-      relay?(["op": "config", "sfx": sfx, "amb": ambient, "mode": mode.rawValue, "ambient": ambientOn, "yaw": yaw])
+      engine.setMusicVolume(0)
+      relay?(["op": "config", "sfx": sfx, "amb": ambient, "mus": musicVolume, "mode": mode.rawValue, "ambient": ambientOn, "yaw": yaw])
+      relay?(["op": "music", "track": musicTrack.map { $0.rawValue as Any } ?? NSNull()])
       lastRelayedYaw = yaw
     } else {
       engine.setVolumes(sfx: sfx, ambient: ambient)
+      engine.setMusicVolume(musicVolume)
+      engine.setMusic(musicTrack)
       if device?.id != currentDevice {
         currentDevice = device?.id
         engine.setOutputDevice(device?.id) // nil = system default
       }
     }
 
-    route = [
+    var r: [String: Any] = [
       "kind": kind,
       "name": name,
       "note": note as Any,
+      "requested": choice,
       "spatial": mode.rawValue,
       "devices": outputs.map { ["uid": $0.uid, "name": $0.name, "bluetooth": $0.isBluetooth, "glasses": AudioDevices.looksLikeGlasses($0.name)] },
     ]
+    if let device {
+      r["glasses"] = AudioDevices.looksLikeGlasses(device.name)
+      r["bound"] = engine.currentOutputDevice() == device.id
+    }
+    route = r
     NSLog("[MetaRayzer] audio route: \(kind) · \(name)\(note.map { " (\($0))" } ?? "")")
-    onRouteChange?(route)
+    publishRoute()
+  }
+
+  /// Sends the route to Dart, with the phone's reported output while relaying.
+  private func publishRoute() {
+    var r = route
+    if relaying, let phone = companionAudio { r["phone"] = phone }
+    route = r
+    onRouteChange?(r)
   }
 }

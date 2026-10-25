@@ -6,7 +6,19 @@
 /// sqrt(x² + z²).
 library;
 
-enum EnemyKind { troll, goblin, frog, skeletonArcher, slime }
+enum EnemyKind {
+  troll,
+  goblin,
+  frog,
+  skeletonArcher,
+  slime,
+
+  /// The night boss (see [BossSpec]). Never chosen by the ordinary spawner.
+  boss;
+
+  /// Kinds the ordinary (daytime) spawner may pick.
+  static const List<EnemyKind> spawnable = [troll, goblin, frog, skeletonArcher, slime];
+}
 
 /// Spell identifiers (also the keys used for permanent unlocks).
 abstract final class SpellIds {
@@ -43,7 +55,7 @@ class EnemySpec {
   final double attackDistance;
 
   /// Melee: seconds between starting the attack (telegraphed) and the hit landing; the player
-  /// can still kill the enemy during this window. Archer: bow-draw time before each arrow.
+  /// can still kill the enemy during this window. (The archer uses [ArcherSpec.telegraphSeconds].)
   /// Scaled by the difficulty's wind-up multiplier, never below [DifficultySpec.minWindupSeconds].
   final double attackWindup;
 
@@ -70,15 +82,152 @@ class FrogSpec {
   final double maxLateralStep;
 }
 
+/// A non-homing enemy projectile (arrow, boss bolt).
+///
+/// Aim: the shooter picks its target point once, when the projectile is released: the player's
+/// position plus a random lateral error of up to ±[aimSpread] world units (scaled by the
+/// difficulty's aim multiplier, never below [minAimSpread]). After launch it flies in a straight
+/// line and never corrects its course. It damages the player only if its path passes within
+/// [WizardConfig.playerHitRadius] + [radius] of the player.
+class ProjectileSpec {
+  const ProjectileSpec({required this.speed, required this.aimSpread, required this.minAimSpread, this.radius = 0.15, this.blockable = true, this.maxRange = 40});
+
+  /// World units per second.
+  final double speed;
+
+  /// Maximum lateral aim error at the player (world units). 0 = perfect aim.
+  final double aimSpread;
+
+  /// Floor for [aimSpread] after difficulty scaling, so later waves never return to perfect aim.
+  final double minAimSpread;
+
+  /// Collision radius of the projectile itself.
+  final double radius;
+
+  /// Whether the shield can block it.
+  final bool blockable;
+
+  /// Removed after travelling this far (it missed and left the arena).
+  final double maxRange;
+}
+
+/// Skeleton Archer attack cycle: reposition → settle → telegraph → fire → recover → repeat.
 class ArcherSpec {
-  const ArcherSpec({this.shotInterval = 3.4, this.arrowSpeed = 10, this.firstShotDelay = 0.6});
+  const ArcherSpec({
+    this.repositionSeconds = 0.9,
+    this.repositionStep = 1.6,
+    this.settleSeconds = 0.45,
+    this.telegraphSeconds = 1.1,
+    this.minTelegraphSeconds = 0.75,
+    this.recoverSeconds = 1.3,
+    this.arrow = const ProjectileSpec(speed: 9, aimSpread: 1.3, minAimSpread: 0.9),
+  });
 
-  /// Seconds between arrows once in position (includes the draw/windup). Scaled by difficulty.
-  final double shotInterval;
+  /// Short sideways walk between shots (seconds, and the maximum lateral distance).
+  final double repositionSeconds;
+  final double repositionStep;
 
-  /// Arrow speed, world units per second. Scaled by difficulty.
-  final double arrowSpeed;
-  final double firstShotDelay;
+  /// Standing still before the telegraph starts.
+  final double settleSeconds;
+
+  /// Bow draw before the arrow is released (scaled by the difficulty's wind-up multiplier, never
+  /// below [minTelegraphSeconds]), with a warning sound at its start.
+  final double telegraphSeconds;
+  final double minTelegraphSeconds;
+
+  /// Pause after a shot (scaled by the difficulty's archer interval multiplier).
+  final double recoverSeconds;
+
+  /// Arrow speed is additionally scaled by the difficulty's arrow speed multiplier.
+  final ProjectileSpec arrow;
+}
+
+/// The base-kit shield: a 0.5 s projectile block triggered by a deliberate blocking pose.
+///
+/// It blocks only [ProjectileSpec.blockable] projectiles that reach [blockRadius] from the player
+/// within ±[halfAngle] of the shield direction (the player's aim/view direction). It never
+/// affects melee or contact damage. Holding the pose does not extend or retrigger it: the pose
+/// must be released before the next activation.
+class ShieldSpec {
+  const ShieldSpec({this.activeSeconds = 0.5, this.rearmSeconds = 0.15, this.blockRadius = 2.2, this.halfAngle = 0.62});
+
+  final double activeSeconds;
+
+  /// Minimum time after a shield ends before a new one can start (even after a release).
+  final double rearmSeconds;
+
+  /// Distance from the player at which projectiles meet the shield (world units).
+  final double blockRadius;
+
+  /// Half-width of the covered arc (radians) around the shield direction.
+  final double halfAngle;
+}
+
+/// Day → dusk → night (boss encounter) → dawn → day, repeating. Night lasts until the boss is
+/// defeated. Ordinary spawning runs only during the day.
+class DayNightSpec {
+  const DayNightSpec({this.enabled = true, this.daySeconds = 75, this.duskSeconds = 4, this.dawnSeconds = 5});
+
+  final bool enabled;
+  final double daySeconds;
+
+  /// Light fades over the dusk; no new ordinary enemies spawn.
+  final double duskSeconds;
+
+  /// Light returns over the dawn; ordinary spawning resumes when day begins.
+  final double dawnSeconds;
+}
+
+/// The night boss: a hovering lich with telegraphed, shield-blockable bolt attacks.
+class BossSpec {
+  const BossSpec({
+    this.name = 'Bone Lich',
+    this.baseHealth = 18,
+    this.healthGrowthPerCycle = 0.35,
+    this.standDistance = 15,
+    this.approachSpeed = 3.2,
+    this.hoverAmplitude = 3.2,
+    this.hoverSpeed = 0.55,
+    this.score = 250,
+    this.firstAttackDelay = 1.2,
+    this.telegraphSeconds = 1.3,
+    this.minTelegraphSeconds = 0.9,
+    this.recoverSeconds = 2.0,
+    this.fanAngle = 0.32,
+    this.summonBelowHealthFraction = 0.5,
+    this.summonCount = 2,
+    this.summonKind = EnemyKind.goblin,
+    this.bolt = const ProjectileSpec(speed: 7.5, aimSpread: 0.45, minAimSpread: 0.3, radius: 0.45),
+  });
+
+  final String name;
+
+  /// Health in the first night; each later night adds [healthGrowthPerCycle] × base.
+  final double baseHealth;
+  final double healthGrowthPerCycle;
+
+  /// Hovers at this distance (inside fireball range) and drifts sideways.
+  final double standDistance;
+  final double approachSpeed;
+  final double hoverAmplitude;
+  final double hoverSpeed;
+  final int score;
+  final double firstAttackDelay;
+
+  /// Glow + rising tone before each volley (scaled by the wind-up multiplier, floored).
+  final double telegraphSeconds;
+  final double minTelegraphSeconds;
+  final double recoverSeconds;
+
+  /// Fan volley: the middle bolt aims at the player, the side bolts this far off (radians) and
+  /// pass beside the player.
+  final double fanAngle;
+
+  /// Below this health fraction the boss summons [summonCount] [summonKind]s, once per night.
+  final double summonBelowHealthFraction;
+  final int summonCount;
+  final EnemyKind summonKind;
+  final ProjectileSpec bolt;
 }
 
 /// Splitting Slime.
@@ -141,6 +290,8 @@ class DifficultySpec {
     this.archerIntervalMultiplierEnd = 0.65,
     this.arrowSpeedMultiplierStart = 1.0,
     this.arrowSpeedMultiplierEnd = 1.25,
+    this.aimSpreadMultiplierStart = 1.0,
+    this.aimSpreadMultiplierEnd = 0.8,
     this.firstSpawnDelay = 1.2,
   });
 
@@ -166,12 +317,18 @@ class DifficultySpec {
   final double archerIntervalMultiplierEnd;
   final double arrowSpeedMultiplierStart;
   final double arrowSpeedMultiplierEnd;
+
+  /// Enemy aim error multiplier (< 1 = more accurate). Each projectile keeps its own
+  /// [ProjectileSpec.minAimSpread] floor, so accuracy never returns to perfect.
+  final double aimSpreadMultiplierStart;
+  final double aimSpreadMultiplierEnd;
   final double firstSpawnDelay;
 }
 
+/// Chain Lightning. Unlocked permanently by defeating the first night boss (see [BossSpec]);
+/// score alone never unlocks it.
 class ChainLightningSpec {
   const ChainLightningSpec({
-    this.unlockScore = 300,
     this.range = 24,
     this.beamHalfWidth = 1.4,
     this.primaryDamage = 2.0,
@@ -182,9 +339,6 @@ class ChainLightningSpec {
     this.cooldownSeconds = 1.5,
     this.effectIntensity = 1.0,
   });
-
-  /// Reaching this score within a single run unlocks Chain Lightning permanently.
-  final int unlockScore;
 
   /// Maximum distance along the aim ray for the primary target.
   final double range;
@@ -219,12 +373,16 @@ class WizardConfig {
     this.fireballSpeed = 48,
     this.fireballDamage = 1,
     this.hitGraceSeconds = 0.6,
+    this.playerHitRadius = 0.7,
     this.enemies = defaultEnemies,
     this.frog = const FrogSpec(),
     this.archer = const ArcherSpec(),
     this.slime = const SlimeSpec(),
     this.difficulty = const DifficultySpec(),
     this.chainLightning = const ChainLightningSpec(),
+    this.shield = const ShieldSpec(),
+    this.dayNight = const DayNightSpec(),
+    this.boss = const BossSpec(),
   });
 
   final int startingLives;
@@ -242,12 +400,18 @@ class WizardConfig {
   /// enemy but don't cost another life (prevents losing two lives to one simultaneous swarm).
   final double hitGraceSeconds;
 
+  /// A projectile damages the player only if its straight path passes this close to the origin.
+  final double playerHitRadius;
+
   final Map<EnemyKind, EnemySpec> enemies;
   final FrogSpec frog;
   final ArcherSpec archer;
   final SlimeSpec slime;
   final DifficultySpec difficulty;
   final ChainLightningSpec chainLightning;
+  final ShieldSpec shield;
+  final DayNightSpec dayNight;
+  final BossSpec boss;
 
   EnemySpec spec(EnemyKind kind) => enemies[kind]!;
 
@@ -295,6 +459,7 @@ class WizardConfig {
       spawnWeightStart: 0.06,
       spawnWeightEnd: 0.2,
       height: 2.2,
+      health: 2, // survives one fireball, so its telegraphed arrows teach the shield
     ),
     EnemyKind.slime: EnemySpec(
       kind: EnemyKind.slime,
@@ -306,6 +471,18 @@ class WizardConfig {
       spawnWeightStart: 0.1,
       spawnWeightEnd: 0.18,
       height: 1.4,
+    ),
+    EnemyKind.boss: EnemySpec(
+      kind: EnemyKind.boss,
+      name: 'Bone Lich',
+      speed: 3.2,
+      score: 250,
+      attackDistance: 15,
+      attackWindup: 1.3,
+      spawnWeightStart: 0,
+      spawnWeightEnd: 0,
+      height: 3.6,
+      health: 18, // the actual health comes from BossSpec (it grows each night)
     ),
   };
 }

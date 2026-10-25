@@ -4,20 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../../app/app_settings.dart';
+import '../../app/tracking_controller.dart';
 import '../../audio/audio_service.dart';
-import '../../input/head_pose.dart';
+import '../../input/hand_input_hub.dart';
 import '../../platform/minigame.dart';
 import '../../ui/camera_preview.dart';
 import '../../ui/camera_stream_indicator.dart';
-import 'aim.dart';
-import 'cast_gesture.dart';
-import 'spell_switch.dart';
-import 'view/arena_projection.dart';
+import 'day_night.dart';
 import 'view/effects.dart';
 import 'view/wizard_painter.dart';
-import 'wizard_audio.dart';
 import 'wizard_config.dart';
 import 'wizard_game.dart';
+import 'wizard_session.dart';
 
 const wizardShooter = MinigameDefinition(
   id: 'wizard_shooter',
@@ -28,9 +27,10 @@ const wizardShooter = MinigameDefinition(
 
 Widget _build(BuildContext context, MinigameHost host) => WizardGameScreen(host: host);
 
-/// Hosts one run: drives [WizardGame] from a ticker, turns hand input into casts and spell
-/// switches, applies head pose + staff aim, and renders with [WizardPainter]. Leaving this widget
-/// (results screen, Esc) disposes the ticker, so nothing keeps running in the background.
+/// Hosts one run: drives a [WizardSession] (game + gestures + effects + audio) from a ticker and
+/// handles what only a real run does: persisting the boss-defeat unlock, day/night/boss music,
+/// and reporting the result. Leaving this widget (results screen, Esc) disposes the ticker, so
+/// nothing keeps running in the background.
 class WizardGameScreen extends StatefulWidget {
   const WizardGameScreen({super.key, required this.host, this.seed, this.config = const WizardConfig()});
   final MinigameHost host;
@@ -43,33 +43,31 @@ class WizardGameScreen extends StatefulWidget {
 
 class WizardGameScreenState extends State<WizardGameScreen> with SingleTickerProviderStateMixin {
   late final WizardGame _game = WizardGame(seed: widget.seed, config: widget.config, unlockedSpells: host.progression.unlocked);
-  final CastGestureRecognizer _gesture = CastGestureRecognizer();
-  final SpellSwitchRecognizer _spellSwitch = SpellSwitchRecognizer();
-  final StaffAim _staff = StaffAim();
-  final WizardEffects _effects = WizardEffects();
-  late final WizardAudio _audio = WizardAudio(host.audio);
-  late final WizardSceneState _scene = WizardSceneState(game: _game, effects: _effects, staff: _staff);
+  late final WizardSession _session = WizardSession(host: host, game: _game);
   final ValueNotifier<int> _repaint = ValueNotifier(0);
   late final Ticker _ticker = createTicker(_onTick);
   Duration _last = Duration.zero;
   bool _finishing = false;
   Timer? _finishTimer;
-  Size _size = const Size(1280, 800);
 
   MinigameHost get host => widget.host;
 
   @visibleForTesting
   WizardGame get game => _game;
 
+  @visibleForTesting
+  WizardSession get session => _session;
+
   @override
   void initState() {
     super.initState();
-    host.handInput.addListener(_onHand);
+    host.handInput.addListener(_session.onHand);
     host.headInput.simulated = host.settings.simulatedInput;
-    HardwareKeyboard.instance.addHandler(_onKey);
+    HardwareKeyboard.instance.addHandler(_session.handleKey);
     host.audio.ambientOn = true;
+    host.audio.setMusic(MusicTracks.day);
     host.audio.play(Sounds.gameStart, positional: false);
-    _onHand();
+    _session.onHand();
     _ticker.start();
   }
 
@@ -77,108 +75,33 @@ class WizardGameScreenState extends State<WizardGameScreen> with SingleTickerPro
   void dispose() {
     _ticker.dispose();
     _finishTimer?.cancel();
-    host.handInput.removeListener(_onHand);
-    HardwareKeyboard.instance.removeHandler(_onKey);
+    host.handInput.removeListener(_session.onHand);
+    HardwareKeyboard.instance.removeHandler(_session.handleKey);
+    host.handInput.simulated.setBlock(false);
     _repaint.dispose();
     super.dispose();
-  }
-
-  bool _onKey(KeyEvent event) {
-    final key = event.logicalKey;
-    final down = event is KeyDownEvent;
-    if (down && (key == LogicalKeyboardKey.keyQ || key == LogicalKeyboardKey.tab)) {
-      _switchSpell();
-      return true;
-    }
-    if (down && key == LogicalKeyboardKey.keyR) {
-      host.headInput.recenter();
-      return true;
-    }
-    if (host.settings.simulatedInput && event is! KeyRepeatEvent) {
-      if (key == LogicalKeyboardKey.keyV) {
-        host.handInput.simulated.setVictory(down);
-        return true;
-      }
-      final turn = switch (key) {
-        LogicalKeyboardKey.arrowLeft => (-1.0, 0.0),
-        LogicalKeyboardKey.arrowRight => (1.0, 0.0),
-        LogicalKeyboardKey.arrowUp => (0.0, 1.0),
-        LogicalKeyboardKey.arrowDown => (0.0, -1.0),
-        _ => null,
-      };
-      if (turn != null) {
-        host.headInput.setSimulatedTurn(yaw: down ? turn.$1 : 0, pitch: down ? turn.$2 : 0);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  void _switchSpell() {
-    if (_game.cycleSpell()) {
-      // Require a fresh fist after switching, so the switch can't trigger an unintended cast.
-      _gesture.reset();
-    }
-  }
-
-  void _onHand() {
-    final frame = host.handInput.value;
-    _scene.hand = frame;
-    _scene.simulated = frame.simulated;
-    if (_spellSwitch.update(frame)) _switchSpell();
-    if (_gesture.update(frame)) _cast();
-    _scene.gesture = _gesture.feedback;
-  }
-
-  void _cast() {
-    final result = _game.cast();
-    if (result == CastResult.launched || result == CastResult.noTargetInRange) {
-      final color = spellColor(_game.selectedSpell);
-      _effects.onCast(color);
-      _effects.emitStaffSparks(_staff.tipOnScreen(_size), color, count: 16, speed: 220);
-    }
-    debugPrint('[metarayzer] ${_game.selectedSpell} cast: ${result.name} (score ${_game.score}, lives ${_game.lives})');
   }
 
   void _onTick(Duration elapsed) {
     final dt = _last == Duration.zero ? 0.0 : (elapsed - _last).inMicroseconds / 1e6;
     _last = elapsed;
-    _scene.time += dt;
-    final nowMs = _scene.time * 1000;
-
-    final head = host.headInput.view(sensitivity: host.settings.headSensitivity, invertYaw: host.settings.invertHeadYaw);
-    _scene.head = head;
-    _staff.update(host.handInput.value, nowMs);
-    _game.aimYaw = _staff.worldAimYaw(head.status == HeadTrackingStatus.unavailable ? 0 : head.yaw);
-
-    _game.update(dt);
-    _gesture.tick();
-    _scene.gesture = _gesture.feedback;
-
-    final events = _game.drainEvents();
+    final events = _session.tick(dt);
     for (final e in events) {
-      if (e is SpellUnlocked) host.progression.unlock(e.spellId); // persisted once
+      switch (e) {
+        case SpellUnlocked(:final spellId):
+          host.progression.unlock(spellId); // persisted once (Progression ignores repeats)
+        case PhaseChanged(:final phase):
+          host.audio.setMusic(phase == DayPhase.night ? MusicTracks.night : MusicTracks.day);
+        default:
+          break;
+      }
     }
-    _effects.consume(events);
-    _audio.consume(events);
-    _audio.tick(dt);
-    host.audio.setListenerYaw(head.yaw);
-
-    // Fireball trails and staff sparks (view-only particles).
-    final projection = ArenaProjection(_size, yaw: head.yaw, pitch: head.pitch);
-    final tip = _staff.tipOnScreen(_size);
-    for (final f in _game.fireballs) {
-      _effects.emitTrail(WizardPainter.fireballScreenPosition(_size, projection, f, tip), 14, dt: dt);
-    }
-    if (_gesture.feedback.phase == CastPhase.charging && _scene.time % 0.1 < dt) {
-      _effects.emitStaffSparks(tip, spellColor(_game.selectedSpell), count: 2, speed: 60);
-    }
-    _effects.update(dt);
     _repaint.value++;
 
     if (_game.isOver && !_finishing) {
       _finishing = true;
       host.audio.ambientOn = false;
+      host.audio.setMusic(null);
       // Let the final hit land visually, then hand the result to the platform.
       _finishTimer = Timer(const Duration(milliseconds: 1300), () {
         host.onFinished(RunResult(
@@ -186,44 +109,67 @@ class WizardGameScreenState extends State<WizardGameScreen> with SingleTickerPro
           runId: host.runId,
           score: _game.score,
           duration: Duration(milliseconds: (_game.elapsed * 1000).round()),
-          stats: {'Enemies defeated': _game.enemiesDefeated, 'Spells cast': _game.castsMade},
+          stats: {
+            'Enemies defeated': _game.enemiesDefeated,
+            'Spells cast': _game.castsMade,
+            if (_game.bossesDefeated > 0) 'Bosses defeated': _game.bossesDefeated,
+          },
         ));
       });
     }
   }
 
   @override
+  Widget build(BuildContext context) => WizardStage(
+        session: _session,
+        repaint: _repaint,
+        tracking: host.tracking,
+        settings: host.settings,
+        handInput: host.handInput,
+      );
+}
+
+/// The in-game view: the painted arena + HUD, the spell bar, the camera-stream indicator and
+/// the small camera inset. Shared by the run screen and the tutorial.
+class WizardStage extends StatelessWidget {
+  const WizardStage({super.key, required this.session, required this.repaint, required this.tracking, required this.settings, required this.handInput, this.showSpellBar = true, this.showStreamIndicator = true});
+  final WizardSession session;
+  final ValueNotifier<int> repaint;
+  final TrackingController tracking;
+  final AppSettings settings;
+  final HandInputHub handInput;
+  final bool showSpellBar;
+
+  /// Off where the app shell already shows the camera-stream indicator (the tutorial).
+  final bool showStreamIndicator;
+
+  @override
   Widget build(BuildContext context) {
-    final tracking = host.tracking;
+    final game = session.game;
     return ColoredBox(
       color: Colors.black,
       child: LayoutBuilder(builder: (context, constraints) {
-        _size = constraints.biggest;
+        session.size = constraints.biggest;
         return Stack(fit: StackFit.expand, children: [
-          CustomPaint(painter: WizardPainter(_scene, repaint: _repaint)),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 30,
-            child: Center(
-              child: ValueListenableBuilder<int>(
-                valueListenable: _repaint,
-                builder: (_, _, _) => SpellBar(
-                  game: _game,
-                  switchProgress: _spellSwitch.progress,
-                  onSelect: (id) {
-                    if (_game.selectSpell(id)) _gesture.reset();
-                  },
+          CustomPaint(painter: WizardPainter(session.scene, repaint: repaint)),
+          if (showSpellBar)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 30,
+              child: Center(
+                child: ValueListenableBuilder<int>(
+                  valueListenable: repaint,
+                  builder: (_, _, _) => SpellBar(game: game, switchProgress: session.spellSwitch.progress, onSelect: session.selectSpell),
                 ),
               ),
             ),
-          ),
-          Positioned(right: 16, top: 76, child: CameraStreamIndicator(tracking: tracking)),
+          if (showStreamIndicator) Positioned(right: 16, top: 76, child: CameraStreamIndicator(tracking: tracking)),
           // Small camera inset (bottom-right) so the player can see their hand in frame.
           ListenableBuilder(
-            listenable: Listenable.merge([tracking, host.settings, host.handInput]),
+            listenable: Listenable.merge([tracking, settings, handInput]),
             builder: (context, _) {
-              final show = host.settings.showCameraInset && !host.handInput.useSimulated && tracking.hasFrame;
+              final show = settings.showCameraInset && !handInput.useSimulated && tracking.hasFrame;
               if (!show) return const SizedBox.shrink();
               return Positioned(
                 right: 16,
@@ -293,7 +239,7 @@ class SpellBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              unlocked ? WizardEffects.spellName(id) : '${WizardEffects.spellName(id)} · reach ${game.config.chainLightning.unlockScore} in a run',
+              unlocked ? WizardEffects.spellName(id) : '${WizardEffects.spellName(id)} · defeat a night boss',
               style: TextStyle(fontFamily: 'Georgia', fontSize: 13, fontWeight: FontWeight.w700, color: unlocked ? (selected ? color : Colors.white70) : const Color(0xFF8A84A0)),
             ),
           ]),

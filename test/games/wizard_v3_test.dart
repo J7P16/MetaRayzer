@@ -266,24 +266,20 @@ void main() {
   });
 
   group('spells and unlocks', () {
-    test('reaching the unlock score unlocks Chain Lightning once', () {
+    test('score alone never unlocks Chain Lightning (v4: the first boss defeat does)', () {
       final g = quietGame();
-      for (var i = 0; i < 20 && g.score < 300; i++) {
-        final e = place(g, EnemyKind.skeletonArcher, 0, 10);
-        g.applyDamage(e, 1);
+      for (var i = 0; i < 40 && g.score < 1000; i++) {
+        g.applyDamage(place(g, EnemyKind.goblin, 0, 10), 1);
       }
-      expect(g.score, greaterThanOrEqualTo(300));
-      final events = g.drainEvents().whereType<SpellUnlocked>().toList();
-      expect(events, hasLength(1));
-      expect(g.availableSpells, [SpellIds.fireball, SpellIds.chainLightning]);
-      g.applyDamage(place(g, EnemyKind.troll, 0, 10), 1);
+      expect(g.score, greaterThanOrEqualTo(1000));
       expect(g.drainEvents().whereType<SpellUnlocked>(), isEmpty);
+      expect(g.availableSpells, [SpellIds.fireball]);
     });
 
     test('a run that starts unlocked never fires the unlock event', () {
       final g = quietGame(unlocked: const {SpellIds.chainLightning});
       for (var i = 0; i < 15; i++) {
-        g.applyDamage(place(g, EnemyKind.skeletonArcher, 0, 10), 1);
+        g.applyDamage(place(g, EnemyKind.goblin, 0, 10), 1);
       }
       expect(g.drainEvents().whereType<SpellUnlocked>(), isEmpty);
     });

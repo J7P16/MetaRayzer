@@ -58,6 +58,7 @@ class _TitleColumn extends StatelessWidget {
       const SizedBox(height: 32),
       Wrap(spacing: 16, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
         FantasyButton(label: 'PLAY', icon: Icons.local_fire_department, primary: true, onPressed: services.navigator.playDefault),
+        FantasyButton(label: 'Tutorial', icon: Icons.school_outlined, onPressed: services.navigator.openTutorial),
         FantasyButton(label: 'Settings', icon: Icons.tune, onPressed: services.navigator.openSettings),
       ]),
       const SizedBox(height: 10),
@@ -70,11 +71,12 @@ class _TitleColumn extends StatelessWidget {
           const _Step(icon: Icons.back_hand_outlined, text: "Raise your LEFT hand into the glasses' view, fingers pointing up. Your staff follows it."),
           const _Step(icon: Icons.sports_mma, text: 'Close it into a FIST: your spell is ready.'),
           const _Step(icon: Icons.front_hand, text: 'Snap it OPEN to cast. Close your fist again before the next spell.'),
+          const _Step(icon: Icons.shield_outlined, text: 'SHIELD: raise your forearm upright, close in front of your face. It blocks arrows and bolts for 0.5 s; lower your hand to use it again.'),
           _Step(
             icon: Icons.bolt,
             text: lightning
                 ? 'Hold a V sign (two fingers up) or press Q to switch between Fireball and Chain Lightning.'
-                : 'Score ${const ChainLightningSpec().unlockScore} in one run to unlock Chain Lightning forever.',
+                : 'Survive the day and defeat the night boss to unlock Chain Lightning forever.',
           ),
         ]),
       ),
@@ -84,7 +86,14 @@ class _TitleColumn extends StatelessWidget {
           Text('SPELLBOOK', style: Fantasy.label),
           const SizedBox(height: 10),
           const _Spell(icon: Icons.local_fire_department, color: Fantasy.ember, name: 'Fireball', text: 'Homes in on the nearest enemy inside the rune line.', unlocked: true),
-          _Spell(icon: Icons.bolt, color: const Color(0xFF7FE7FF), name: 'Chain Lightning', text: 'Strikes the first enemy where your staff points, then arcs to nearby enemies with weaker jolts.', unlocked: lightning),
+          const _Spell(icon: Icons.shield_outlined, color: Color(0xFF6CF2FF), name: 'Shield', text: 'Always ready, whatever spell is selected. Blocks projectiles only, never melee blows.', unlocked: true),
+          _Spell(
+            icon: Icons.bolt,
+            color: const Color(0xFF7FE7FF),
+            name: 'Chain Lightning',
+            text: 'Strikes the first enemy where your staff points, then arcs to nearby enemies with weaker jolts.${lightning ? '' : ' Unlocked by defeating your first night boss.'}',
+            unlocked: lightning,
+          ),
         ]),
       ),
     ]);

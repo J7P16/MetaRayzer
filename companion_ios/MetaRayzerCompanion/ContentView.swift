@@ -7,6 +7,7 @@ struct ContentView: View {
 
   private var glasses: GlassesController { model.glasses }
   private var link: MacLink { model.link }
+  private var audio: CompanionAudio { model.audio }
 
   var body: some View {
     NavigationStack {
@@ -14,6 +15,7 @@ struct ContentView: View {
         macSection
         glassesSection
         streamSection
+        audioSection
         if let image = glasses.latestPreview, glasses.isStreaming {
           Section("Preview (also shown on the Mac)") {
             Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260)
@@ -87,6 +89,32 @@ struct ContentView: View {
         Button("Connect glasses (opens Meta AI)") { glasses.register() }
           .disabled(glasses.registrationState == .registering)
       }
+    }
+  }
+
+  /// Where the game audio relayed from the Mac actually plays (iOS's current route), and the
+  /// system route picker to choose the glasses.
+  private var audioSection: some View {
+    Section {
+      LabeledContent("Playing on", value: audio.routeDescription)
+      if audio.glassesActive {
+        Label("The glasses are the iPhone's audio output", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      } else {
+        Label("The glasses are not the audio output", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+      }
+      HStack {
+        Text("Choose audio output")
+        Spacer()
+        AudioRoutePicker().frame(width: 44, height: 44)
+      }
+      LabeledContent("Game sounds played", value: "\(audio.played)")
+      if let error = audio.lastError {
+        Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
+      }
+    } header: {
+      Text("Game audio (Mac → iPhone → glasses)")
+    } footer: {
+      Text("Used when the Mac's audio output is \"Glasses via iPhone companion\". iOS plays it on the current output; pick the glasses here or in Control Center. Meta's toolkit has no API to force audio to the glasses. Keep this app in the foreground.")
     }
   }
 

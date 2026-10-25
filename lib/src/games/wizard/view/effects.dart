@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import '../day_night.dart';
 import '../enemies.dart';
 import '../wizard_config.dart';
 import '../wizard_game.dart';
@@ -22,7 +23,7 @@ class WorldEffect {
   double get t => (age / duration).clamp(0.0, 1.0);
 }
 
-enum EffectKind { impact, defeat, fizzle, scorePopup, spawnFlash, strike, slimeSplat, lightningImpact }
+enum EffectKind { impact, defeat, fizzle, scorePopup, spawnFlash, strike, slimeSplat, lightningImpact, shieldBlock, bossDefeat }
 
 /// A particle in world space (projected every frame, so it moves with the view).
 class WorldParticle {
@@ -96,7 +97,28 @@ class WizardEffects {
   /// Spell switch toast.
   double switchToast = 0;
   String? switchedTo;
+
+  /// Shield: a flash when raised, a pulse on each block, a fade when it expires.
+  double shieldFlash = 0;
+  double blockFlash = 0;
+  double shieldFade = 0;
+  int blocks = 0;
+
+  /// Phase / boss announcement: remaining seconds, title and subtitle.
+  double banner = 0;
+  double bannerSeconds = 1;
+  String bannerTitle = '';
+  String bannerSubtitle = '';
+  Color bannerColor = const Color(0xFFFFD27A);
   int _seed = 0;
+
+  void _announce(String title, String subtitle, Color color, {double seconds = 3.2}) {
+    banner = seconds;
+    bannerSeconds = seconds;
+    bannerTitle = title;
+    bannerSubtitle = subtitle;
+    bannerColor = color;
+  }
 
   void onCast(Color color) {
     castFlash = 1;
@@ -145,7 +167,7 @@ class WizardEffects {
             lostHeart = livesLeft;
             heartPulse = 1;
           }
-          if (source != EnemyKind.skeletonArcher) {
+          if (source != EnemyKind.skeletonArcher && source != EnemyKind.boss) {
             effects.add(WorldEffect(kind: EffectKind.strike, x: 0, z: 1.2, elevation: 1.2, duration: 0.35));
           }
         case ChainLightningCast(:final hits):
@@ -161,7 +183,37 @@ class WizardEffects {
         case SpellSelected(:final spellId):
           switchToast = 1.6;
           switchedTo = spellId;
-        case FireballLaunched() || ArrowFired() || GameEnded() || EnemyAttackStarted():
+        case ProjectileBlocked(:final x, :final z, :final projectile):
+          blockFlash = 1;
+          blocks++;
+          effects.add(WorldEffect(kind: EffectKind.shieldBlock, x: x, z: z, elevation: projectile.elevation, duration: 0.5, seed: _seed++));
+          _burst(x, z, projectile.elevation, count: 22, speed: 4, life: 0.5, colors: const [Color(0xFFBFF4FF), Color(0xFF6CF2FF), Color(0xFFFFFFFF)], size: 0.07, gravity: 3);
+        case ShieldRaised():
+          shieldFlash = 1;
+          shieldFade = 0;
+        case ShieldExpired():
+          shieldFade = 1;
+        case PhaseChanged(:final phase, :final night):
+          switch (phase) {
+            case DayPhase.dusk:
+              _announce('NIGHT FALLS', 'Something stirs beyond the portal…', const Color(0xFFB98CFF));
+            case DayPhase.night:
+              break; // BossAppeared announces the night
+            case DayPhase.dawn:
+              _announce('DAWN BREAKS', 'Day $night survived. The horde returns with the light.', const Color(0xFFFFD27A));
+            case DayPhase.day:
+              break;
+          }
+        case BossAppeared(:final boss):
+          _announce(boss.spec.name.toUpperCase(), 'Raise your shield when its bolts fly!', const Color(0xFF9BFFB8), seconds: 3.6);
+        case BossDefeated(:final boss, :final points):
+          effects.add(WorldEffect(kind: EffectKind.bossDefeat, x: boss.x, z: boss.z, elevation: boss.height * 0.5 + boss.elevation, duration: 1.6, seed: _seed++));
+          effects.add(WorldEffect(kind: EffectKind.scorePopup, x: boss.x, z: boss.z, elevation: boss.height + 1.2, duration: 1.6, text: '+$points'));
+          _burst(boss.x, boss.z, boss.height * 0.5, count: 80, speed: 7, life: 1.2, colors: const [Color(0xFF9BFFB8), Color(0xFFFFFFFF), Color(0xFFB98CFF)], size: 0.12, gravity: 2);
+          skyFlash = 1;
+          // Comes after the dawn PhaseChanged in the same step, so it replaces that banner.
+          _announce('${boss.spec.name.toUpperCase()} DEFEATED', 'Dawn breaks. Night ${boss.night} survived.', const Color(0xFF9BFFB8), seconds: 3.6);
+        case FireballLaunched() || ProjectileFired() || ProjectileHitPlayer() || ProjectileMissed() || GameEnded() || EnemyAttackStarted():
           break;
       }
     }
@@ -173,6 +225,7 @@ class WizardEffects {
         EnemyKind.frog => const Color(0xFF55D27C),
         EnemyKind.skeletonArcher => const Color(0xFFE9E4D4),
         EnemyKind.slime => const Color(0xFF7CF29A),
+        EnemyKind.boss => const Color(0xFF9BFFB8),
       };
 
   void _burst(double x, double z, double elevation, {required int count, required double speed, required double life, required List<Color> colors, required double size, double gravity = 0}) {
@@ -258,6 +311,10 @@ class WizardEffects {
     skyFlash = (skyFlash - dt * 4).clamp(0.0, 1.0);
     unlockBanner = math.max(0, unlockBanner - dt);
     switchToast = math.max(0, switchToast - dt);
+    shieldFlash = (shieldFlash - dt * 5).clamp(0.0, 1.0);
+    blockFlash = (blockFlash - dt * 2.5).clamp(0.0, 1.0);
+    shieldFade = (shieldFade - dt * 3).clamp(0.0, 1.0);
+    banner = math.max(0, banner - dt);
   }
 
   /// Enemies' death animation progress, 0..1.

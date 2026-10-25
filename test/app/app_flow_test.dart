@@ -172,7 +172,7 @@ void main() {
     await teardown(tester);
   });
 
-  testWidgets('reaching the unlock score in a run unlocks Chain Lightning permanently', (tester) async {
+  testWidgets('defeating the first night boss in a run unlocks Chain Lightning permanently', (tester) async {
     await boot(tester);
     await tester.tap(find.text('PLAY'));
     await tester.pump();
@@ -180,9 +180,15 @@ void main() {
     final game = tester.state<WizardGameScreenState>(find.byType(WizardGameScreen)).game;
     expect(services.progression.isUnlocked(SpellIds.chainLightning), isFalse);
     expect(game.availableSpells, [SpellIds.fireball]);
-    while (game.score < game.config.chainLightning.unlockScore) {
-      game.applyDamage(game.spawn(EnemyKind.skeletonArcher, x: 0)..z = 10, 1);
+    // Score alone does nothing.
+    for (var i = 0; i < 30; i++) {
+      game.applyDamage(game.spawn(EnemyKind.goblin, x: 0)..z = 10, 1);
     }
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(services.progression.isUnlocked(SpellIds.chainLightning), isFalse);
+    // A real boss defeat does.
+    final boss = game.spawn(EnemyKind.boss, x: 0)..z = 15;
+    game.applyDamage(boss, boss.maxHealth);
     await tester.pump(const Duration(milliseconds: 20)); // one game tick drains the event
     expect(services.progression.isUnlocked(SpellIds.chainLightning), isTrue);
     expect(game.availableSpells, contains(SpellIds.chainLightning));

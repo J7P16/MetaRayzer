@@ -227,9 +227,11 @@ class MetarayzerNative {
       _control.invokeMethod('setDetectionEnabled', {'enabled': enabled});
 
   /// Applies audio settings and output choice; returns the resulting route map.
+  /// Volumes are effective values (master × channel × enabled), 0..1.
   Future<Map<String, Object?>> audioConfigure({
     required double sfx,
     required double ambient,
+    required double music,
     required String mode,
     required String output,
     required bool ambientOn,
@@ -237,11 +239,16 @@ class MetarayzerNative {
       await _control.invokeMapMethod<String, Object?>('audioConfigure', {
         'sfx': sfx,
         'ambient': ambient,
+        'music': music,
         'mode': mode,
         'output': output,
         'ambientOn': ambientOn,
       }) ??
       const {};
+
+  /// Crossfades the background music to [track] (`menu`, `day`, `night`), or fades it out (null).
+  /// The native side ignores a request for the track already playing.
+  Future<void> audioMusic(String? track) => _control.invokeMethod('audioMusic', {'track': track});
 
   /// Plays a synthesized sound at game-world position (x right, z ahead, y up).
   Future<void> audioPlay(String sound, {double x = 0, double y = 1, double z = 1, double gain = 1, bool positional = true}) =>
