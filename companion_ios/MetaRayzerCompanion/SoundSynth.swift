@@ -194,11 +194,35 @@ enum SoundSynth {
       return whoosh(0.4, from: 2600, to: 500, gain: 0.3, rng: &rng)
     case .bossCharge:
       // Rising unearthly choir tone over the telegraph.
-      return mix(tone(1.3, { t in (sin(2 * .pi * (110 + 160 * t) * t) + 0.5 * sin(2 * .pi * (165 + 240 * t) * t)) * (0.6 + 0.4 * sin(2 * .pi * 6 * t)) }, env: .swell(1.1, 0.15), gain: 0.3),
-                 whoosh(1.3, from: 200, to: 1600, gain: 0.18, rng: &rng))
+      let choir = tone(
+          1.3,
+          { t in
+              let phase = 2.0 * .pi * t
+              let frequency1 = 110.0 + 160.0 * t
+              let frequency2 = 165.0 + 240.0 * t
+
+              let fundamental = sin(phase * frequency1)
+              let harmonic = 0.5 * sin(phase * frequency2)
+              let modulation = 0.6 + 0.4 * sin(phase * 6.0)
+
+              return (fundamental + harmonic) * modulation
+          },
+          env: .swell(1.1, 0.15),
+          gain: 0.3
+      )
+
+      let sweep = whoosh(
+          1.3,
+          from: 200,
+          to: 1600,
+          gain: 0.18,
+          rng: &rng
+      )
+
+      return mix(choir, sweep)
+      // return mix(tone(1.3, { t in (sin(2 * .pi * (110 + 160 * t) * t) + 0.5 * sin(2 * .pi * (165 + 240 * t) * t)) * (0.6 + 0.4 * sin(2 * .pi * 6 * t)) }, env: .swell(1.1, 0.15), gain: 0.3), whoosh(1.3, from: 200, to: 1600, gain: 0.18, rng: &rng))
     case .bossBolt:
-      return mix(tone(0.6, { t in saw((220 - 150 * t) * t) * 0.6 + sin(2 * .pi * (110 - 50 * t) * t) }, env: .pluck(0.2), gain: 0.4),
-                 whoosh(0.5, from: 300, to: 2000, gain: 0.3, rng: &rng))
+      return mix(tone(0.6, { t in saw((220 - 150 * t) * t) * 0.6 + sin(2 * .pi * (110 - 50 * t) * t) }, env: .pluck(0.2), gain: 0.4), whoosh(0.5, from: 300, to: 2000, gain: 0.3, rng: &rng))
     case .bossAppear:
       // Low horn swell and a dissonant cluster: a boss has arrived.
       var out = lowpass(tone(2.4, { t in saw(55 * t) + saw(55.4 * t) + 0.6 * saw(82.4 * t) }, env: .swell(0.6, 1.2), gain: 0.4), 0.06)

@@ -2,7 +2,7 @@
 // Signing & Capabilities / Build Settings.
 
 // Your Apple Developer Team ID (Xcode > Settings > Accounts). Required to run on an iPhone.
-DEVELOPMENT_TEAM =
+DEVELOPMENT_TEAM = PVV2Z9KXXW
 
 // Must be unique per team; change it if Xcode reports the ID is taken.
 COMPANION_BUNDLE_ID = com.metarayzer.companion
