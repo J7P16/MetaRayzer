@@ -1,9 +1,13 @@
 import 'dart:math' as math;
 
+import 'aim.dart';
+import 'difficulty.dart';
 import 'enemies.dart';
 import 'wizard_config.dart';
 
-/// Things that happened during an update, for effects and sound. Drained by the view.
+/// Things that happened during an update, for effects and sound. Drained by the view. Events
+/// describe outcomes that ALREADY happened in the simulation; nothing in the view or audio layer
+/// applies damage.
 sealed class GameEvent {
   const GameEvent();
 }
@@ -23,29 +27,76 @@ class FireballImpact extends GameEvent {
   final bool defeated;
 }
 
+/// [points] is 0 for slime family members other than the last one (see [SlimeSpec]).
 class EnemyDefeated extends GameEvent {
   const EnemyDefeated(this.enemy, this.points);
   final Enemy enemy;
   final int points;
 }
 
+class SlimeSplit extends GameEvent {
+  const SlimeSplit(this.parent, this.children);
+  final SplittingSlime parent;
+  final List<SplittingSlime> children;
+}
+
 class PlayerHit extends GameEvent {
-  const PlayerHit({required this.source, required this.livesLeft, required this.lifeLost});
+  const PlayerHit({required this.source, required this.livesLeft, required this.lifeLost, this.x = 0, this.z = 1});
   final EnemyKind source;
   final int livesLeft;
 
   /// False when the hit landed during the post-hit grace period.
   final bool lifeLost;
+  final double x;
+  final double z;
 }
 
 class ArrowFired extends GameEvent {
-  const ArrowFired(this.arrow);
+  const ArrowFired(this.arrow, this.shooter);
   final Arrow arrow;
+  final Enemy shooter;
 }
 
 class EnemySpawned extends GameEvent {
   const EnemySpawned(this.enemy);
   final Enemy enemy;
+}
+
+/// An enemy began its telegraphed attack (melee wind-up or bow draw).
+class EnemyAttackStarted extends GameEvent {
+  const EnemyAttackStarted(this.enemy);
+  final Enemy enemy;
+}
+
+class ChainHit {
+  const ChainHit({required this.enemy, required this.x, required this.z, required this.elevation, required this.damage, required this.defeated, required this.split});
+  final Enemy enemy;
+  final double x;
+  final double z;
+  final double elevation;
+  final double damage;
+  final bool defeated;
+  final bool split;
+}
+
+/// One Chain Lightning cast, already resolved. [hits] is ordered primary → last chain link.
+/// When [hits] is empty the bolt ended at ([endX], [endZ]) without hitting anything.
+class ChainLightningCast extends GameEvent {
+  const ChainLightningCast({required this.aimYaw, required this.hits, required this.endX, required this.endZ});
+  final double aimYaw;
+  final List<ChainHit> hits;
+  final double endX;
+  final double endZ;
+}
+
+class SpellUnlocked extends GameEvent {
+  const SpellUnlocked(this.spellId);
+  final String spellId;
+}
+
+class SpellSelected extends GameEvent {
+  const SpellSelected(this.spellId);
+  final String spellId;
 }
 
 class GameEnded extends GameEvent {
@@ -70,8 +121,6 @@ class Fireball {
   double get progress => (time / duration).clamp(0.0, 1.0);
   double get x => fromX + (toX - fromX) * progress;
   double get z => fromZ + (toZ - fromZ) * progress;
-
-  /// Starts at hand height (~1.2 below eye level is handled by the renderer) and arcs slightly.
   double get elevation => toElevation * progress + math.sin(progress * math.pi) * 0.6;
 }
 
@@ -85,14 +134,23 @@ class Arrow {
 }
 
 /// Outcome of a cast, for feedback.
-enum CastResult { launched, noTargetInRange, gameOver }
+enum CastResult { launched, noTargetInRange, onCooldown, locked, gameOver }
+
+class _SlimeFamily {
+  int alive = 1;
+  bool broken = false;
+  bool awarded = false;
+}
 
 /// The complete wizard-shooter simulation. Pure Dart: no Flutter, no camera, no wall clock
-/// (time only advances through [update]), seeded randomness. Rendering, input and persistence
-/// live elsewhere.
+/// (time only advances through [update]), seeded randomness. Rendering, input, audio and
+/// persistence live elsewhere.
 class WizardGame implements EnemyContext {
-  WizardGame({this.config = const WizardConfig(), int? seed}) : random = math.Random(seed) {
+  WizardGame({this.config = const WizardConfig(), int? seed, Set<String> unlockedSpells = const {}})
+      : random = math.Random(seed),
+        unlockedSpells = {SpellIds.fireball, ...unlockedSpells} {
     lives = config.startingLives;
+    difficulty = DifficultyController(config);
     _spawnTimer = config.difficulty.spawnIntervalStart - config.difficulty.firstSpawnDelay;
   }
 
@@ -100,11 +158,14 @@ class WizardGame implements EnemyContext {
   final WizardConfig config;
   @override
   final math.Random random;
+  @override
+  late final DifficultyController difficulty;
 
   final List<Enemy> enemies = [];
   final List<Fireball> fireballs = [];
   final List<Arrow> arrows = [];
   final List<GameEvent> _events = [];
+  final Map<int, _SlimeFamily> _families = {};
 
   late int lives;
   int score = 0;
@@ -116,30 +177,28 @@ class WizardGame implements EnemyContext {
   double _graceTimer = 0;
   int _nextId = 1;
 
+  /// Spells usable this run (Fireball always; others once unlocked).
+  final Set<String> unlockedSpells;
+  String selectedSpell = SpellIds.fireball;
+  final Map<String, double> _cooldownUntil = {};
+
+  /// World aim direction (radians, 0 = straight ahead, + = right), set by the screen from the
+  /// staff/hand and head pose each frame. Used by directional spells.
+  double aimYaw = 0;
+
   /// Seconds since the player was last hit (for damage flash), large if never.
   double timeSinceHit = 999;
 
-  // ---- Difficulty ----
+  // ---- Difficulty (delegated to the central controller) ----
 
-  /// 0..1, smoothstep over [DifficultySpec.rampSeconds] of survival time.
-  double get difficulty {
-    final t = (elapsed / config.difficulty.rampSeconds).clamp(0.0, 1.0);
-    return t * t * (3 - 2 * t);
-  }
-
-  double _lerp(double a, double b) => a + (b - a) * difficulty;
-
-  double get spawnInterval => _lerp(config.difficulty.spawnIntervalStart, config.difficulty.spawnIntervalEnd);
-  int get maxEnemies => _lerp(config.difficulty.maxEnemiesStart.toDouble(), config.difficulty.maxEnemiesEnd.toDouble()).round();
-  @override
-  double get speedMultiplier => _lerp(config.difficulty.speedMultiplierStart, config.difficulty.speedMultiplierEnd);
-
-  double spawnWeight(EnemyKind kind) {
-    final s = config.spec(kind);
-    return _lerp(s.spawnWeightStart, s.spawnWeightEnd);
-  }
+  double get difficultyLevel => difficulty.progress;
+  double get spawnInterval => difficulty.spawnInterval;
+  int get maxEnemies => difficulty.maxEnemies;
+  double get speedMultiplier => difficulty.speedMultiplier;
+  double spawnWeight(EnemyKind kind) => difficulty.spawnWeight(kind);
 
   List<Enemy> get livingEnemies => enemies.where((e) => e.isAlive).toList();
+  int get activeSlimes => enemies.where((e) => e.isAlive && e is SplittingSlime).length;
 
   /// Returns and clears the events produced since the last call.
   List<GameEvent> drainEvents() {
@@ -157,6 +216,7 @@ class WizardGame implements EnemyContext {
     elapsed += dt;
     timeSinceHit += dt;
     if (_graceTimer > 0) _graceTimer -= dt;
+    difficulty.update(elapsedSeconds: elapsed, score: score);
 
     _updateSpawning(dt);
     for (final e in List.of(enemies)) {
@@ -168,7 +228,8 @@ class WizardGame implements EnemyContext {
     if (isOver) return;
 
     // Cleanup: defeated enemies linger briefly for their death animation.
-    enemies.removeWhere((e) => e.state == EnemyState.resolved || (e.state == EnemyState.defeated && e.stateTime > 0.6));
+    enemies.removeWhere((e) =>
+        e.state == EnemyState.resolved || e.state == EnemyState.split || (e.state == EnemyState.defeated && e.stateTime > 0.6));
     fireballs.removeWhere((f) => f.done);
     arrows.removeWhere((a) => a.done);
   }
@@ -178,7 +239,10 @@ class WizardGame implements EnemyContext {
     if (_spawnTimer < spawnInterval) return;
     if (livingEnemies.length >= maxEnemies) return; // wait for room; keep the timer full
     _spawnTimer = 0;
-    spawn(_pickKind());
+    var kind = _pickKind();
+    // Respect the slime cap at spawn time too (a big slime can become several enemies).
+    if (kind == EnemyKind.slime && activeSlimes + config.slime.childrenPerSplit > config.slime.maxActiveSlimes) kind = EnemyKind.troll;
+    spawn(kind);
   }
 
   EnemyKind _pickKind() {
@@ -194,26 +258,133 @@ class WizardGame implements EnemyContext {
 
   /// Spawns an enemy of [kind] in the distance (public for tests and future scripted waves).
   Enemy spawn(EnemyKind kind, {double? x}) {
+    final id = _nextId++;
     final enemy = createEnemy(
       kind,
-      id: _nextId++,
+      id: id,
       config: config,
       x: x ?? (random.nextDouble() * 2 - 1) * config.spawnHalfWidth,
       random: random,
+      familyId: id,
     );
+    if (enemy is SplittingSlime) _families[enemy.familyId] = _SlimeFamily();
     enemies.add(enemy);
     _events.add(EnemySpawned(enemy));
     return enemy;
   }
 
-  // ---- Player actions ----
+  // ---- Damage pipeline (the ONLY place enemies take damage, split, die and award score) ----
+
+  /// Applies [amount] damage to [enemy] once. Returns what happened.
+  ({bool defeated, bool split}) applyDamage(Enemy enemy, double amount) {
+    if (!enemy.isAlive || amount <= 0) return (defeated: false, split: false);
+    if (enemy is SplittingSlime && enemy.canSplit(config.slime)) {
+      final room = config.slime.maxActiveSlimes - activeSlimes + 1; // +1: the parent goes away
+      if (room >= config.slime.childrenPerSplit) {
+        _split(enemy);
+        return (defeated: false, split: true);
+      }
+      // At the cap: no split, the slime simply dies.
+      enemy.enter(EnemyState.defeated);
+      _onDefeated(enemy);
+      return (defeated: true, split: false);
+    }
+    final defeated = enemy.takeDamage(amount);
+    if (defeated) _onDefeated(enemy);
+    return (defeated: defeated, split: false);
+  }
+
+  void _split(SplittingSlime parent) {
+    final s = config.slime;
+    parent.enter(EnemyState.split);
+    final children = <SplittingSlime>[];
+    final d = parent.distance;
+    final back = d <= 1e-9 ? 1.0 : (d + s.knockback) / d;
+    for (var i = 0; i < s.childrenPerSplit; i++) {
+      final offset = (i - (s.childrenPerSplit - 1) / 2) * s.childSpread;
+      final child = SplittingSlime(
+        id: _nextId++,
+        spec: parent.spec,
+        x: parent.x * back + offset,
+        z: parent.z * back,
+        familyId: parent.familyId,
+        generation: parent.generation + 1,
+        slime: s,
+      );
+      children.add(child);
+      enemies.add(child);
+    }
+    final family = _families[parent.familyId];
+    if (family != null) family.alive += children.length - 1;
+    _events.add(SlimeSplit(parent, children));
+  }
+
+  void _onDefeated(Enemy enemy) {
+    if (enemy.scored) return;
+    enemy.scored = true;
+    enemiesDefeated++;
+    var points = 0;
+    if (enemy is SplittingSlime) {
+      final family = _families[enemy.familyId];
+      if (family != null) {
+        family.alive--;
+        if (family.alive <= 0 && !family.broken && !family.awarded) {
+          family.awarded = true;
+          points = enemy.spec.score;
+        }
+      }
+    } else {
+      points = enemy.spec.score;
+    }
+    if (points > 0) _addScore(points);
+    _events.add(EnemyDefeated(enemy, points));
+  }
+
+  void _addScore(int points) {
+    score += points;
+    final lightning = config.chainLightning;
+    if (score >= lightning.unlockScore && unlockedSpells.add(SpellIds.chainLightning)) {
+      _events.add(const SpellUnlocked(SpellIds.chainLightning));
+    }
+  }
+
+  // ---- Spells ----
+
+  /// Spells available this run, in cycling order.
+  List<String> get availableSpells => SpellIds.all.where(unlockedSpells.contains).toList();
+
+  bool selectSpell(String id) {
+    if (!unlockedSpells.contains(id) || selectedSpell == id) return false;
+    selectedSpell = id;
+    _events.add(SpellSelected(id));
+    return true;
+  }
+
+  /// Switches to the next unlocked spell. Returns false if only one spell is available.
+  bool cycleSpell() {
+    final spells = availableSpells;
+    if (spells.length < 2) return false;
+    return selectSpell(spells[(spells.indexOf(selectedSpell) + 1) % spells.length]);
+  }
+
+  /// 0..1 remaining cooldown of [id].
+  double cooldownRemaining(String id) {
+    final until = _cooldownUntil[id];
+    if (until == null || until <= elapsed) return 0;
+    final total = id == SpellIds.chainLightning ? config.chainLightning.cooldownSeconds : 1;
+    return ((until - elapsed) / total).clamp(0.0, 1.0);
+  }
+
+  /// Casts the selected spell (the cast gesture calls this).
+  CastResult cast() => switch (selectedSpell) {
+        SpellIds.chainLightning => castChainLightning(),
+        _ => castFireball(),
+      };
 
   /// Living enemies a fireball can target: within range and not already doomed by fireballs in
-  /// flight. Nearest first.
+  /// flight. Nearest first. (Fireball targeting is unchanged from v2: it ignores the aim.)
   List<Enemy> targetableEnemies() {
-    final list = enemies
-        .where((e) => e.isAlive && e.distance <= config.fireballRange && e.incomingDamage < e.health)
-        .toList()
+    final list = enemies.where((e) => e.isAlive && e.distance <= config.fireballRange && e.incomingDamage < e.health).toList()
       ..sort((a, b) => a.distance.compareTo(b.distance));
     return list;
   }
@@ -226,8 +397,8 @@ class WizardGame implements EnemyContext {
     final targets = targetableEnemies();
     final target = targets.isEmpty ? null : targets.first;
     const fromX = -0.6, fromZ = 0.6; // the player's left hand
-    final toX = target?.x ?? 0;
-    final toZ = target?.z ?? config.fireballRange;
+    final toX = target?.x ?? math.sin(aimYaw) * config.fireballRange;
+    final toZ = target?.z ?? math.cos(aimYaw) * config.fireballRange;
     final dist = math.sqrt(math.pow(toX - fromX, 2) + math.pow(toZ - fromZ, 2));
     final fireball = Fireball(
       target: target,
@@ -235,7 +406,7 @@ class WizardGame implements EnemyContext {
       fromZ: fromZ,
       toX: toX,
       toZ: toZ,
-      toElevation: target == null ? 0.8 : target.spec.height * 0.5 + target.elevation,
+      toElevation: target == null ? 0.8 : target.height * 0.5 + target.elevation,
       duration: math.max(0.12, dist / config.fireballSpeed),
     );
     target?.incomingDamage += config.fireballDamage;
@@ -253,32 +424,87 @@ class WizardGame implements EnemyContext {
         // Home in on the moving target so the trajectory always ends on it.
         f.toX = target.x;
         f.toZ = target.z;
-        f.toElevation = target.spec.height * 0.5 + target.elevation;
+        f.toElevation = target.height * 0.5 + target.elevation;
       }
       if (f.time < f.duration) continue;
-      f.done = true;
+      f.done = true; // resolved exactly once
       if (target == null) {
         _events.add(FireballImpact(x: f.toX, z: f.toZ, elevation: f.toElevation, defeated: false));
         continue;
       }
       target.incomingDamage = math.max(0, target.incomingDamage - config.fireballDamage);
       if (!target.isAlive) {
-        // It already struck the player (or died) before the fireball arrived: fizzle.
+        // It already struck the player (or died/split) before the fireball arrived: fizzle.
         _events.add(FireballImpact(x: f.toX, z: f.toZ, elevation: f.toElevation, defeated: false));
         continue;
       }
-      final defeated = target.takeDamage(config.fireballDamage);
-      _events.add(FireballImpact(x: target.x, z: target.z, elevation: f.toElevation, enemy: target, defeated: defeated));
-      if (defeated) _award(target);
+      final outcome = applyDamage(target, config.fireballDamage);
+      _events.add(FireballImpact(x: target.x, z: target.z, elevation: f.toElevation, enemy: target, defeated: outcome.defeated));
     }
   }
 
-  void _award(Enemy enemy) {
-    if (enemy.scored) return;
-    enemy.scored = true;
-    score += enemy.spec.score;
-    enemiesDefeated++;
-    _events.add(EnemyDefeated(enemy, enemy.spec.score));
+  /// Directional spell: hits the first enemy on the aim ray, then arcs to nearby enemies with
+  /// decreasing damage. Damage is applied immediately and exactly once per enemy per cast; the
+  /// returned [ChainLightningCast] event only describes it for effects.
+  CastResult castChainLightning() {
+    if (isOver) return CastResult.gameOver;
+    if (!unlockedSpells.contains(SpellIds.chainLightning)) return CastResult.locked;
+    if (cooldownRemaining(SpellIds.chainLightning) > 0) return CastResult.onCooldown;
+    final spec = config.chainLightning;
+    castsMade++;
+    _cooldownUntil[SpellIds.chainLightning] = elapsed + spec.cooldownSeconds;
+
+    // Snapshot: enemies spawned during this cast (slime children) can't be chained to.
+    final eligible = enemies.where((e) => e.isAlive).toList();
+    final primary = chainLightningTarget();
+    if (primary == null) {
+      _events.add(ChainLightningCast(aimYaw: aimYaw, hits: const [], endX: math.sin(aimYaw) * spec.range, endZ: math.cos(aimYaw) * spec.range));
+      return CastResult.noTargetInRange;
+    }
+
+    final hits = <ChainHit>[];
+    final visited = <Enemy>{};
+    var current = primary;
+    var damage = spec.primaryDamage;
+    for (var i = 0; i < spec.maxTargets && i <= spec.maxJumps; i++) {
+      visited.add(current);
+      final (x, z, elevation) = (current.x, current.z, current.height * 0.5 + current.elevation);
+      final outcome = applyDamage(current, damage);
+      hits.add(ChainHit(enemy: current, x: x, z: z, elevation: elevation, damage: damage, defeated: outcome.defeated, split: outcome.split));
+      // Next link: nearest not-yet-hit eligible enemy within the chain radius of this one.
+      Enemy? next;
+      var nearest = double.infinity;
+      for (final e in eligible) {
+        if (visited.contains(e) || !e.isAlive) continue;
+        final d = math.sqrt(math.pow(e.x - x, 2) + math.pow(e.z - z, 2));
+        if (d <= spec.chainRadius && d < nearest) {
+          nearest = d;
+          next = e;
+        }
+      }
+      if (next == null) break;
+      current = next;
+      damage *= spec.damageFalloff;
+    }
+    _events.add(ChainLightningCast(aimYaw: aimYaw, hits: hits, endX: primary.x, endZ: primary.z));
+    return CastResult.launched;
+  }
+
+  /// The enemy Chain Lightning would hit first along the current aim (also used for the aim
+  /// preview, so what the player sees is exactly what the cast will do).
+  Enemy? chainLightningTarget() {
+    final spec = config.chainLightning;
+    Enemy? primary;
+    var best = double.infinity;
+    for (final e in enemies) {
+      if (!e.isAlive) continue;
+      final along = distanceAlongAim(aimYaw, e.x, e.z, halfWidth: spec.beamHalfWidth, range: spec.range);
+      if (along != null && along < best) {
+        best = along;
+        primary = e;
+      }
+    }
+    return primary;
   }
 
   void _updateArrows(double dt) {
@@ -288,7 +514,7 @@ class WizardGame implements EnemyContext {
       final step = a.speed * dt;
       if (d <= step + 0.4) {
         a.done = true;
-        _damagePlayer(EnemyKind.skeletonArcher);
+        _damagePlayer(EnemyKind.skeletonArcher, a.x, a.z);
         if (isOver) return;
         continue;
       }
@@ -300,16 +526,28 @@ class WizardGame implements EnemyContext {
   // ---- EnemyContext ----
 
   @override
-  void meleeHit(Enemy attacker) => _damagePlayer(attacker.kind);
+  void meleeHit(Enemy attacker) {
+    if (attacker is SplittingSlime) {
+      final family = _families[attacker.familyId];
+      if (family != null) {
+        family.broken = true; // a member reached the player: the family awards nothing
+        family.alive--;
+      }
+    }
+    _damagePlayer(attacker.kind, attacker.x, attacker.z);
+  }
 
   @override
   void fireArrow(Enemy shooter) {
-    final arrow = Arrow(x: shooter.x, z: shooter.z, speed: config.archer.arrowSpeed);
+    final arrow = Arrow(x: shooter.x, z: shooter.z, speed: config.archer.arrowSpeed * difficulty.arrowSpeedMultiplier);
     arrows.add(arrow);
-    _events.add(ArrowFired(arrow));
+    _events.add(ArrowFired(arrow, shooter));
   }
 
-  void _damagePlayer(EnemyKind source) {
+  @override
+  void attackStarted(Enemy enemy) => _events.add(EnemyAttackStarted(enemy));
+
+  void _damagePlayer(EnemyKind source, double x, double z) {
     if (isOver) return;
     final lifeLost = _graceTimer <= 0;
     if (lifeLost) {
@@ -317,7 +555,7 @@ class WizardGame implements EnemyContext {
       _graceTimer = config.hitGraceSeconds;
       timeSinceHit = 0;
     }
-    _events.add(PlayerHit(source: source, livesLeft: lives, lifeLost: lifeLost));
+    _events.add(PlayerHit(source: source, livesLeft: lives, lifeLost: lifeLost, x: x, z: z));
     if (lives == 0) {
       isOver = true;
       _events.add(GameEnded(score));

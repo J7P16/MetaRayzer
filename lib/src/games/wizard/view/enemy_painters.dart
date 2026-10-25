@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui';
+import 'package:flutter/painting.dart';
 
 import '../enemies.dart';
 import '../wizard_config.dart';
@@ -27,17 +27,19 @@ void paintEnemy(Canvas canvas, Enemy e, Offset feet, double u, {required double 
       _frog(canvas, e, elevated, u, alpha);
     case EnemyKind.skeletonArcher:
       _archer(canvas, e as SkeletonArcher, elevated, u, alpha);
+    case EnemyKind.slime:
+      _slime(canvas, e as SplittingSlime, elevated, u, alpha);
   }
   if (death > 0) {
-    final c = elevated - Offset(0, e.spec.height * 0.5 * u);
-    canvas.drawCircle(c, e.spec.height * 0.6 * u, Paint()..color = const Color(0xFFFF9A3D).withValues(alpha: 0.5 * (1 - death)));
+    final c = elevated - Offset(0, e.height * 0.5 * u);
+    canvas.drawCircle(c, e.height * 0.6 * u, Paint()..color = const Color(0xFFFF9A3D).withValues(alpha: 0.5 * (1 - death)));
   }
   canvas.restore();
 
   // Melee wind-up telegraph: a pulsing red warning above the head.
   if (e.state == EnemyState.attacking && e.kind != EnemyKind.skeletonArcher) {
     final p = e.attackProgress;
-    final top = elevated - Offset(0, (e.spec.height + 0.5) * u);
+    final top = elevated - Offset(0, (e.height + 0.5) * u);
     final pulse = 0.6 + 0.4 * math.sin(e.age * 18);
     canvas.drawCircle(top, (0.25 + 0.15 * p) * u, Paint()..color = const Color(0xFFFF3B3B).withValues(alpha: alpha * pulse));
     _bang(canvas, top, 0.22 * u, alpha);
@@ -179,5 +181,30 @@ void _archer(Canvas canvas, SkeletonArcher e, Offset f, double u, double a) {
   if (e.drawProgress > 0) {
     canvas.drawLine(nock, nock - Offset(0.85 * u, 0), _fill(const Color(0xFFB0B8C8), a)..strokeWidth = 0.05 * u);
     canvas.drawCircle(nock - Offset(0.85 * u, 0), 0.08 * u, _fill(const Color(0xFFFF4040), a * e.drawProgress));
+  }
+}
+
+void _slime(Canvas canvas, SplittingSlime e, Offset f, double u, double a) {
+  final s = e.scale;
+  final squish = e.squish; // 0..1 ooze cycle
+  final w = (1.5 + 0.25 * squish) * s * u;
+  final h = (1.25 - 0.25 * squish) * s * u;
+  _shadow(canvas, f, 1.5 * s, u, a, 0);
+  final body = Rect.fromLTWH(f.dx - w / 2, f.dy - h, w, h);
+  final path = Path()
+    ..moveTo(body.left, body.bottom)
+    ..cubicTo(body.left - w * 0.05, body.top + h * 0.35, body.left + w * 0.15, body.top, body.center.dx, body.top)
+    ..cubicTo(body.right - w * 0.15, body.top, body.right + w * 0.05, body.top + h * 0.35, body.right, body.bottom)
+    ..close();
+  // Smaller generations glow brighter so they read as "split" children.
+  final tint = Color.lerp(const Color(0xFF3BC46B), const Color(0xFF9BFFB8), e.generation * 0.5)!;
+  canvas.drawPath(path, Paint()..shader = RadialGradient(center: const Alignment(-0.3, -0.4), colors: [tint.withValues(alpha: 0.95 * a), const Color(0xFF1C7A45).withValues(alpha: 0.85 * a)]).createShader(body));
+  // Nucleus and highlight.
+  canvas.drawCircle(body.center + Offset(0, h * 0.12), w * 0.14, _fill(const Color(0xFF145C33), 0.6 * a));
+  canvas.drawOval(Rect.fromCenter(center: body.topCenter + Offset(-w * 0.18, h * 0.22), width: w * 0.22, height: h * 0.14), _fill(const Color(0xFFFFFFFF), 0.45 * a));
+  for (final dx in [-0.17, 0.17]) {
+    final eye = Offset(body.center.dx + dx * w, body.top + h * 0.4);
+    canvas.drawCircle(eye, w * 0.07, _fill(const Color(0xFFFFFFFF), a));
+    canvas.drawCircle(eye + Offset(0, w * 0.015), w * 0.035, _fill(const Color(0xFF0E2A18), a));
   }
 }

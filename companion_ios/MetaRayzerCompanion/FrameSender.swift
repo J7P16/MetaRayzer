@@ -21,6 +21,12 @@ final class FrameSender: @unchecked Sendable {
   private var inFlight = false
   private var dropped = 0
 
+  /// Sends a small message immediately (no frame backpressure), e.g. 30 Hz motion samples.
+  func sendSmall(_ data: Data) {
+    guard let conn = lock.withLock({ _connection }) else { return }
+    conn.send(content: data, completion: .contentProcessed { _ in })
+  }
+
   func submit(_ data: Data) {
     let toSend: (NWConnection, Data)? = lock.withLock {
       guard let conn = _connection else { return nil }

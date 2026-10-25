@@ -12,6 +12,7 @@ import 'hand_pose.dart';
 ///
 /// - Pointer position (over the app window) = hand position.
 /// - Hold the mouse button or Space/F = closed fist; release = open palm.
+/// - Hold V key = V sign (spell-switch pose).
 /// - Pointer outside the window = no hand.
 ///
 /// Samples are published at a fixed rate like a camera, so frame-based gesture confirmation
@@ -25,6 +26,7 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
   int _frameId = 0;
   Offset? _position;
   bool _fist = false;
+  bool _victory = false;
   HandInputFrame _value = HandInputFrame.unavailable;
 
   @override
@@ -54,6 +56,8 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
 
   void setFist(bool fist) => _fist = fist;
 
+  void setVictory(bool victory) => _victory = victory;
+
   void _emit() {
     _frameId++;
     final now = _clock.elapsedMicroseconds / 1000;
@@ -68,9 +72,9 @@ class SimulatedHandInput extends ChangeNotifier implements HandInputSource {
             simulated: true,
             handId: 1,
             classification: PoseClassification(
-              pose: _fist ? HandPose.fist : HandPose.open,
+              pose: _victory ? HandPose.victory : (_fist ? HandPose.fist : HandPose.open),
               confidence: 1,
-              openness: _fist ? 0 : 1,
+              openness: _fist ? 0 : (_victory ? 0.5 : 1),
             ),
           );
     notifyListeners();

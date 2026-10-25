@@ -85,7 +85,7 @@ void main() {
 
   Future<void> teardown(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
-    services.settings.simulatedHand = false;
+    services.settings.simulatedInput = false;
     services.tracking.dispose();
     tester.view.reset();
   }
@@ -103,7 +103,9 @@ void main() {
     await boot(tester);
     expect(find.byType(StartMenu), findsOneWidget);
     expect(find.text('No scores yet. Be the first wizard to hold the line.'), findsOneWidget);
-    expect(find.textContaining('Glasses connected'), findsNothing);
+    expect(find.textContaining('camera streaming'), findsNothing);
+    expect(find.text('Glasses connected · camera off'), findsOneWidget, reason: 'stream indicator: connected, not streaming');
+    expect(find.textContaining('LIVE'), findsNothing);
 
     await tester.tap(find.text('PLAY'));
     await tester.pump();
@@ -150,12 +152,11 @@ void main() {
     await teardown(tester);
   });
 
-  testWidgets('hand mode: hovering PLAY with the hand cursor for the dwell time starts the game once', (tester) async {
+  testWidgets('hand navigation (always on): hovering PLAY with the hand cursor for the dwell time starts the game once', (tester) async {
     await boot(tester);
     services.settings
-      ..uiControlMode = UiControlMode.hand
       ..dwellSeconds = 1.0
-      ..simulatedHand = true; // dev source drives the same hand-input interface as the camera
+      ..simulatedInput = true; // dev source drives the same hand-input interface as the camera
     await tester.pump();
 
     final playCenter = tester.getCenter(find.text('PLAY'));
@@ -171,7 +172,31 @@ void main() {
     await teardown(tester);
   });
 
-  testWidgets('mouse mode works with the glasses disconnected', (tester) async {
+  testWidgets('reaching the unlock score in a run unlocks Chain Lightning permanently', (tester) async {
+    await boot(tester);
+    await tester.tap(find.text('PLAY'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final game = tester.state<WizardGameScreenState>(find.byType(WizardGameScreen)).game;
+    expect(services.progression.isUnlocked(SpellIds.chainLightning), isFalse);
+    expect(game.availableSpells, [SpellIds.fireball]);
+    while (game.score < game.config.chainLightning.unlockScore) {
+      game.applyDamage(game.spawn(EnemyKind.skeletonArcher, x: 0)..z = 10, 1);
+    }
+    await tester.pump(const Duration(milliseconds: 20)); // one game tick drains the event
+    expect(services.progression.isUnlocked(SpellIds.chainLightning), isTrue);
+    expect(game.availableSpells, contains(SpellIds.chainLightning));
+    expect(find.textContaining('UNLOCKED'), findsNothing, reason: 'banner is painted, not a widget');
+    // Q switches spells in game.
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyQ);
+    await tester.pump();
+    expect(game.selectedSpell, SpellIds.chainLightning);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 400));
+    await teardown(tester);
+  });
+
+  testWidgets('mouse navigation works with the glasses disconnected', (tester) async {
     await boot(tester);
     native.controller.add(const CompanionEvent(connected: false));
     await tester.pump();

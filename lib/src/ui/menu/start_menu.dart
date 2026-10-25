@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:metarayzer_native/metarayzer_native.dart';
 
 import '../../app/app_services.dart';
-import '../../app/app_settings.dart';
+import '../../games/wizard/wizard_config.dart';
 import '../../input/hand_input.dart';
 import 'fantasy_theme.dart';
 
@@ -14,30 +14,25 @@ class StartMenu extends StatelessWidget {
     final s = AppScope.of(context);
     final game = s.navigator.games.first;
     return ListenableBuilder(
-      listenable: Listenable.merge([s.settings, s.tracking, s.handInput, s.leaderboards[game.id]!]),
+      listenable: Listenable.merge([s.settings, s.tracking, s.handInput, s.progression, s.leaderboards[game.id]!]),
       builder: (context, _) => SizedBox.expand(
         child: FantasyBackground(
           child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final wide = constraints.maxWidth > 980;
-                final left = _TitleColumn(onPlay: s.navigator.playDefault, tagline: game.tagline);
-                final right = _SidePanels(services: s, gameId: game.id);
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(32),
-                  child: wide
-                      ? Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(flex: 5, child: left),
-                            const SizedBox(width: 32),
-                            Expanded(flex: 4, child: right),
-                          ],
-                        )
-                      : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [left, const SizedBox(height: 24), right]),
-                );
-              },
-            ),
+            child: LayoutBuilder(builder: (context, constraints) {
+              final wide = constraints.maxWidth > 980;
+              final left = _TitleColumn(services: s, tagline: game.tagline);
+              final right = _SidePanels(services: s, gameId: game.id);
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
+                child: wide
+                    ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Expanded(flex: 5, child: left),
+                        const SizedBox(width: 32),
+                        Expanded(flex: 4, child: right),
+                      ])
+                    : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [left, const SizedBox(height: 24), right]),
+              );
+            }),
           ),
         ),
       ),
@@ -46,42 +41,78 @@ class StartMenu extends StatelessWidget {
 }
 
 class _TitleColumn extends StatelessWidget {
-  const _TitleColumn({required this.onPlay, required this.tagline});
-  final VoidCallback onPlay;
+  const _TitleColumn({required this.services, required this.tagline});
+  final AppServices services;
   final String tagline;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
+  Widget build(BuildContext context) {
+    final lightning = services.progression.isUnlocked(SpellIds.chainLightning);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 24),
       Text('METARAYZER PRESENTS', style: Fantasy.label),
       const SizedBox(height: 8),
-      FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.centerLeft,
-        child: Text("WIZARD'S\nSTAND", style: Fantasy.title(72).copyWith(height: 1.0)),
-      ),
+      FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text("WIZARD'S\nSTAND", style: Fantasy.title(72).copyWith(height: 1.0))),
       const SizedBox(height: 12),
       Text(tagline, style: Fantasy.body.copyWith(fontSize: 18, color: Fantasy.mist)),
-      const SizedBox(height: 36),
-      FantasyButton(label: 'PLAY', icon: Icons.local_fire_department, primary: true, onPressed: onPlay),
-      const SizedBox(height: 36),
+      const SizedBox(height: 32),
+      Wrap(spacing: 16, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        FantasyButton(label: 'PLAY', icon: Icons.local_fire_department, primary: true, onPressed: services.navigator.playDefault),
+        FantasyButton(label: 'Settings', icon: Icons.tune, onPressed: services.navigator.openSettings),
+      ]),
+      const SizedBox(height: 10),
+      Text('Navigate with the mouse, or hover your hand over a button until its ring fills.', style: Fantasy.body.copyWith(fontSize: 13, color: Fantasy.mist)),
+      const SizedBox(height: 28),
       FantasyPanel(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('HOW TO CAST', style: Fantasy.label),
-            const SizedBox(height: 10),
-            const _Step(icon: Icons.back_hand_outlined, text: 'Raise your LEFT hand into the glasses\' view, fingers pointing up.'),
-            const _Step(icon: Icons.sports_mma, text: 'Close it into a FIST: your spell is ready.'),
-            const _Step(icon: Icons.front_hand, text: 'Snap it OPEN: a fireball strikes the nearest enemy inside the rune line.'),
-            const _Step(icon: Icons.replay, text: 'Close your fist again to ready the next spell. Three hits and you fall.'),
-          ],
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('HOW TO CAST · LEFT HAND', style: Fantasy.label),
+          const SizedBox(height: 10),
+          const _Step(icon: Icons.back_hand_outlined, text: "Raise your LEFT hand into the glasses' view, fingers pointing up. Your staff follows it."),
+          const _Step(icon: Icons.sports_mma, text: 'Close it into a FIST: your spell is ready.'),
+          const _Step(icon: Icons.front_hand, text: 'Snap it OPEN to cast. Close your fist again before the next spell.'),
+          _Step(
+            icon: Icons.bolt,
+            text: lightning
+                ? 'Hold a V sign (two fingers up) or press Q to switch between Fireball and Chain Lightning.'
+                : 'Score ${const ChainLightningSpec().unlockScore} in one run to unlock Chain Lightning forever.',
+          ),
+        ]),
       ),
-    ],
-  );
+      const SizedBox(height: 16),
+      FantasyPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('SPELLBOOK', style: Fantasy.label),
+          const SizedBox(height: 10),
+          const _Spell(icon: Icons.local_fire_department, color: Fantasy.ember, name: 'Fireball', text: 'Homes in on the nearest enemy inside the rune line.', unlocked: true),
+          _Spell(icon: Icons.bolt, color: const Color(0xFF7FE7FF), name: 'Chain Lightning', text: 'Strikes the first enemy where your staff points, then arcs to nearby enemies with weaker jolts.', unlocked: lightning),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _Spell extends StatelessWidget {
+  const _Spell({required this.icon, required this.color, required this.name, required this.text, required this.unlocked});
+  final IconData icon;
+  final Color color;
+  final String name;
+  final String text;
+  final bool unlocked;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(unlocked ? icon : Icons.lock, color: unlocked ? color : Fantasy.mist, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text.rich(TextSpan(children: [
+              TextSpan(text: '$name${unlocked ? '' : ' (locked)'}  ', style: Fantasy.body.copyWith(color: unlocked ? color : Fantasy.mist, fontWeight: FontWeight.w700)),
+              TextSpan(text: text, style: Fantasy.body),
+            ])),
+          ),
+        ]),
+      );
 }
 
 class _Step extends StatelessWidget {
@@ -91,16 +122,13 @@ class _Step extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: Fantasy.ember, size: 20),
-        const SizedBox(width: 10),
-        Expanded(child: Text(text, style: Fantasy.body)),
-      ],
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, color: Fantasy.ember, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: Fantasy.body)),
+        ]),
+      );
 }
 
 class _SidePanels extends StatelessWidget {
@@ -110,71 +138,19 @@ class _SidePanels extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final settings = services.settings;
     final scores = services.leaderboards[gameId]!.top.map((e) => e.score).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        FantasyPanel(child: _StatusBlock(services: services)),
-        const SizedBox(height: 16),
-        FantasyPanel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('MENU CONTROL', style: Fantasy.label),
-              const SizedBox(height: 8),
-              FantasyChoice<UiControlMode>(
-                options: const {UiControlMode.mouse: 'Mouse & keyboard', UiControlMode.hand: 'Hand (hover to select)'},
-                selected: settings.uiControlMode,
-                onSelected: (m) => settings.uiControlMode = m,
-              ),
-              if (settings.uiControlMode == UiControlMode.hand) ...[
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Text('Hover time', style: Fantasy.body),
-                    const Spacer(),
-                    FantasyButton(label: '−', compact: true, onPressed: () => settings.dwellSeconds -= 0.2),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Text('${settings.dwellSeconds.toStringAsFixed(1)} s', style: Fantasy.body),
-                    ),
-                    FantasyButton(label: '+', compact: true, onPressed: () => settings.dwellSeconds += 0.2),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 16),
-              Text('CASTING HAND', style: Fantasy.label),
-              const SizedBox(height: 8),
-              FantasyChoice<HandPreference>(
-                options: const {HandPreference.left: 'Left', HandPreference.right: 'Right', HandPreference.any: 'Either'},
-                selected: settings.handPreference,
-                onSelected: (p) => settings.handPreference = p,
-              ),
-          const SizedBox(height: 16),
-          Text('CAMERA VIEW IN GAME', style: Fantasy.label),
-          const SizedBox(height: 8),
-          FantasyChoice<bool>(
-            options: const {true: 'Show small inset', false: 'Hide'},
-            selected: settings.showCameraInset,
-            onSelected: (v) => settings.showCameraInset = v,
-          ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        FantasyPanel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('HALL OF FLAME · TOP 3', style: Fantasy.label),
-              const SizedBox(height: 10),
-              LeaderboardList(scores: scores),
-            ],
-          ),
-        ),
-      ],
-    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const SizedBox(height: 30),
+      FantasyPanel(child: _StatusBlock(services: services)),
+      const SizedBox(height: 16),
+      FantasyPanel(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('HALL OF FLAME · TOP 3', style: Fantasy.label),
+          const SizedBox(height: 10),
+          LeaderboardList(scores: scores),
+        ]),
+      ),
+    ]);
   }
 }
 
@@ -195,40 +171,33 @@ class _StatusBlock extends StatelessWidget {
       _ when streaming => ('Glasses connected · camera streaming${t.companionStatus['mock'] == true ? ' (MOCK)' : ''}', Fantasy.ok),
       _ => ('iPhone connected · glasses camera not streaming', Fantasy.warn),
     };
-    final (handText, handColor) = settings.simulatedHand
-        ? ('Simulated hand (dev): mouse = hand, hold button or Space = fist', Fantasy.warn)
+    final (handText, handColor) = settings.simulatedInput
+        ? ('Simulated input (dev): mouse = hand, hold button or Space = fist', Fantasy.warn)
         : switch (hand.status) {
-            HandTrackingStatus.tracking => ('Hand detected · ${hand.pose.name}', Fantasy.ok),
-            HandTrackingStatus.searching => ('Hand detection ready · raise your hand into view', Fantasy.ok),
+            HandTrackingStatus.tracking => ('Left hand detected · ${hand.pose.name}', Fantasy.ok),
+            HandTrackingStatus.searching => ('Hand detection ready · raise your left hand into view', Fantasy.ok),
             HandTrackingStatus.lost => ('Hand briefly lost', Fantasy.warn),
             HandTrackingStatus.unavailable => ('Hand detection unavailable · ${hand.message ?? ''}', Fantasy.bad),
           };
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('THE SEEING STONES', style: Fantasy.label),
-        const SizedBox(height: 10),
-        _StatusLine(icon: Icons.visibility, color: glassesColor, text: glassesText),
-        _StatusLine(icon: Icons.back_hand, color: handColor, text: handText),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            if (t.source == FrameSource.companion && t.companionConnected && !streaming)
-              FantasyButton(label: 'Start glasses camera', icon: Icons.videocam, compact: true, onPressed: t.startGlassesStream),
-            FantasyButton(label: 'Glasses & tracking setup', icon: Icons.tune, compact: true, onPressed: services.navigator.openSetup),
-            FantasyButton(
-              label: settings.simulatedHand ? 'Use camera hand' : 'Simulated hand (dev)',
-              icon: settings.simulatedHand ? Icons.videocam : Icons.mouse,
-              compact: true,
-              onPressed: () => settings.simulatedHand = !settings.simulatedHand,
-            ),
-          ],
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('THE SEEING STONES', style: Fantasy.label),
+      const SizedBox(height: 10),
+      _StatusLine(icon: Icons.visibility, color: glassesColor, text: glassesText),
+      _StatusLine(icon: Icons.back_hand, color: handColor, text: handText),
+      const SizedBox(height: 10),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        if (t.source == FrameSource.companion && t.companionConnected && !streaming)
+          FantasyButton(label: 'Start glasses camera', icon: Icons.videocam, compact: true, onPressed: t.startGlassesStream),
+        FantasyButton(label: 'Glasses & tracking setup', icon: Icons.tune, compact: true, onPressed: services.navigator.openSetup),
+        FantasyButton(
+          label: settings.simulatedInput ? 'Use camera hand' : 'Simulated input (dev)',
+          icon: settings.simulatedInput ? Icons.videocam : Icons.mouse,
+          compact: true,
+          onPressed: () => settings.simulatedInput = !settings.simulatedInput,
         ),
-      ],
-    );
+      ]),
+    ]);
   }
 }
 
@@ -240,14 +209,11 @@ class _StatusLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 8),
-        Expanded(child: Text(text, style: Fantasy.body.copyWith(fontSize: 14))),
-      ],
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: Fantasy.body.copyWith(fontSize: 14))),
+        ]),
+      );
 }

@@ -6,7 +6,9 @@ import FlutterMacOS
 /// - Method channel `metarayzer_native/control`: start/stop the listener, pick the frame source,
 ///   forward stream commands to the phone, acknowledge displayed frames.
 /// - Event channel `metarayzer_native/events`: a single stream of typed maps (`type` key):
-///   `server`, `companion`, `companionStatus`, `frame`, `webcam`, `error`.
+///   `server`, `companion`, `companionStatus`, `frame`, `webcam`, `error`, `motion` (glasses
+///   orientation relayed by the companion), `audioRoute`.
+/// - Audio: `audioConfigure`, `audioPlay`, `audioListener` (see AudioController).
 ///
 /// All heavy work (network IO, JPEG decode, Vision inference) happens on background queues;
 /// only the final event hand-off hops to the main thread, as Flutter requires.
@@ -26,6 +28,12 @@ public class MetarayzerNativePlugin: NSObject, FlutterPlugin, FlutterStreamHandl
   private var lastCompanionEvent: [String: Any]?
   private var lastCompanionStatus: [String: Any]?
   private var stats = PipelineStats()  // pipeline queue only
+  private lazy var audio: AudioController = {
+    let a = AudioController()
+    a.relay = { [weak self] message in self?.server.send(json: message, type: .audio) }
+    a.onRouteChange = { [weak self] route in self?.emit(["type": "audioRoute", "route": route]) }
+    return a
+  }()
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = MetarayzerNativePlugin()
@@ -78,6 +86,15 @@ public class MetarayzerNativePlugin: NSObject, FlutterPlugin, FlutterStreamHandl
     case "ackFrame":
       pipeline.acknowledge()
       result(nil)
+    case "audioConfigure":
+      audio.configure(args)
+      result(audio.route)
+    case "audioPlay":
+      audio.play(args)
+      result(nil)
+    case "audioListener":
+      audio.setListenerYaw(Float(args["yaw"] as? Double ?? 0))
+      result(nil)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -110,6 +127,7 @@ public class MetarayzerNativePlugin: NSObject, FlutterPlugin, FlutterStreamHandl
     for event in [lastServerEvent, lastCompanionEvent, lastCompanionStatus].compactMap({ $0 }) {
       events(event)
     }
+    events(["type": "audioRoute", "route": audio.route])
     return nil
   }
 
@@ -199,6 +217,7 @@ extension MetarayzerNativePlugin: FrameServerDelegate {
     NSLog("[MetaRayzer] companion connected from \(name)")
     let event: [String: Any] = ["type": "companion", "connected": true, "address": name]
     DispatchQueue.main.async {
+      self.audio.companionConnected = true
       self.lastCompanionEvent = event
       self.sink?(event)
     }
@@ -208,6 +227,7 @@ extension MetarayzerNativePlugin: FrameServerDelegate {
     NSLog("[MetaRayzer] companion disconnected: \(reason ?? "closed")")
     let event: [String: Any] = ["type": "companion", "connected": false, "reason": reason as Any]
     DispatchQueue.main.async {
+      self.audio.companionConnected = false
       self.lastCompanionEvent = event
       self.lastCompanionStatus = nil
       self.sink?(event)
@@ -234,8 +254,11 @@ extension MetarayzerNativePlugin: FrameServerDelegate {
         self.lastCompanionStatus = event
         self.sink?(event)
       }
-    case .command:
-      break  // commands only flow mac -> phone
+    case .motion(let m):
+      let event: [String: Any] = ["type": "motion", "x": Double(m.qx), "y": Double(m.qy), "z": Double(m.qz), "w": Double(m.qw), "t": Int(m.timestampNs)]
+      DispatchQueue.main.async { self.sink?(event) }
+    case .command, .audio:
+      break  // these only flow mac -> phone
     }
   }
 }

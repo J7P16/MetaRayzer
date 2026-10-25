@@ -65,6 +65,11 @@ sealed class NativeEvent {
         return WebcamEvent(running: map['running'] as bool? ?? false, error: map['error'] as String?);
       case 'error':
         return ErrorEvent(map['message'] as String? ?? 'Unknown native error');
+      case 'motion':
+        double d(String k) => (map[k] as num?)?.toDouble() ?? 0;
+        return MotionEvent(x: d('x'), y: d('y'), z: d('z'), w: (map['w'] as num?)?.toDouble() ?? 1, deviceTimeNs: map['t'] as int? ?? 0);
+      case 'audioRoute':
+        return AudioRouteEvent(Map<String, Object?>.from(map['route'] as Map? ?? const {}));
       case 'frame':
         final hands = (map['hands'] as List?)?.map((h) {
           final hand = h as Map;
@@ -122,6 +127,22 @@ class WebcamEvent extends NativeEvent {
   const WebcamEvent({required this.running, this.error});
   final bool running;
   final String? error;
+}
+
+/// Glasses orientation (unit quaternion) from the experimental DAT Motion capability, relayed by
+/// the companion.
+class MotionEvent extends NativeEvent {
+  const MotionEvent({required this.x, required this.y, required this.z, required this.w, required this.deviceTimeNs});
+  final double x, y, z, w;
+  final int deviceTimeNs;
+}
+
+/// The active audio output route chosen by the native AudioController.
+class AudioRouteEvent extends NativeEvent {
+  const AudioRouteEvent(this.route);
+
+  /// kind: mac | device | companion | fallback; name; note; spatial; devices: [{uid, name, bluetooth, glasses}].
+  final Map<String, Object?> route;
 }
 
 class ErrorEvent extends NativeEvent {
@@ -204,6 +225,30 @@ class MetarayzerNative {
 
   Future<void> setDetectionEnabled(bool enabled) =>
       _control.invokeMethod('setDetectionEnabled', {'enabled': enabled});
+
+  /// Applies audio settings and output choice; returns the resulting route map.
+  Future<Map<String, Object?>> audioConfigure({
+    required double sfx,
+    required double ambient,
+    required String mode,
+    required String output,
+    required bool ambientOn,
+  }) async =>
+      await _control.invokeMapMethod<String, Object?>('audioConfigure', {
+        'sfx': sfx,
+        'ambient': ambient,
+        'mode': mode,
+        'output': output,
+        'ambientOn': ambientOn,
+      }) ??
+      const {};
+
+  /// Plays a synthesized sound at game-world position (x right, z ahead, y up).
+  Future<void> audioPlay(String sound, {double x = 0, double y = 1, double z = 1, double gain = 1, bool positional = true}) =>
+      _control.invokeMethod('audioPlay', {'s': sound, 'x': x, 'y': y, 'z': z, 'g': gain, 'p': positional});
+
+  /// Turns the audio listener with the in-game view (radians, + = right).
+  Future<void> audioListener(double yaw) => _control.invokeMethod('audioListener', {'yaw': yaw});
 
   /// Must be called once per received [FrameEvent]; the native side holds back new frames
   /// while too many are unacknowledged, so the UI never builds up a backlog.

@@ -45,6 +45,13 @@ final class FrameServer {
     }
   }
 
+  /// Sends a JSON message of any type to the connected companion (no-op without one).
+  func send(json: [String: Any], type: MessageType) {
+    queue.async {
+      self.connection?.send(content: WireCodec.encodeJSON(type: type, json), completion: .contentProcessed { _ in })
+    }
+  }
+
   func send(command: [String: Any]) {
     queue.async {
       guard let connection = self.connection else { return }

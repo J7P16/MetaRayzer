@@ -31,6 +31,8 @@ final class MacLink {
   private(set) var droppedFrames = 0
   /// Called on the main actor for each command from the Mac.
   var onCommand: ((String) -> Void)?
+  /// Called on the main actor for each relayed sound message from the Mac.
+  var onAudio: (([String: Any]) -> Void)?
   /// Provides the current glasses status to send right after connecting.
   var statusProvider: (() -> [String: Any])?
 
@@ -186,8 +188,14 @@ final class MacLink {
           Task { @MainActor in self?.connectionLost(complete ? "Mac closed the connection" : "Connection lost") }
           return
         }
-        if case .command(let json)? = try? WireCodec.decodeBody(body), let cmd = json["cmd"] as? String {
-          Task { @MainActor in self?.onCommand?(cmd) }
+        switch try? WireCodec.decodeBody(body) {
+        case .command(let json)?:
+          if let cmd = json["cmd"] as? String { Task { @MainActor in self?.onCommand?(cmd) } }
+        case .audio(let json)?:
+          let message = json as NSDictionary
+          Task { @MainActor in self?.onAudio?(message as? [String: Any] ?? [:]) }
+        default:
+          break
         }
         self?.receiveHeader(on: conn)
       }
@@ -199,6 +207,11 @@ final class MacLink {
   func sendStatus(_ status: [String: Any]) {
     guard let connection, isConnected else { return }
     connection.send(content: WireCodec.encodeJSON(type: .status, status), completion: .contentProcessed { _ in })
+  }
+
+  /// Thread-safe; called from the motion task.
+  nonisolated func send(motion: MotionMessage) {
+    sender.sendSmall(WireCodec.encodeMotion(motion))
   }
 
   /// Thread-safe; may be called from the frame-encoding queue.

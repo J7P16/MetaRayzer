@@ -32,6 +32,7 @@ final class Recorder: FrameServerDelegate {
   var frames: [FrameMessage] = []
   var hello: [String: Any]?
   var status: [String: Any]?
+  var motions: [MotionMessage] = []
 
   func frameServer(_ server: FrameServer, listenerStateChanged state: FrameServer.ListenerState) {
     if case .listening = state { lock.withLock { listening = true } }
@@ -47,7 +48,8 @@ final class Recorder: FrameServerDelegate {
       case .frame(let f): frames.append(f)
       case .hello(let h): hello = h
       case .status(let s): status = s
-      case .command: break
+      case .motion(let m): motions.append(m)
+      case .command, .audio: break
       }
     }
   }
@@ -83,6 +85,7 @@ func connectClient() -> NWConnection {
 
 var clientReady = false
 var commands: [String] = []
+var audioMessages: [[String: Any]] = []
 let client = connectClient()
 client.stateUpdateHandler = { if case .ready = $0 { clientReady = true } }
 check(wait(5) { clientReady && recorder.lock.withLock { recorder.connected == 1 } }, "phone connects; Mac reports companion connected")
@@ -91,8 +94,12 @@ func receive(on conn: NWConnection) {
   conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { header, _, _, _ in
     guard let header, let length = try? WireCodec.bodyLength(header: header) else { return }
     conn.receive(minimumIncompleteLength: length, maximumLength: length) { body, _, _, _ in
-      if let body, case .command(let json)? = try? WireCodec.decodeBody(body), let cmd = json["cmd"] as? String {
-        commands.append(cmd)
+      if let body {
+        switch try? WireCodec.decodeBody(body) {
+        case .command(let json)?: if let cmd = json["cmd"] as? String { commands.append(cmd) }
+        case .audio(let json)?: audioMessages.append(json)
+        default: break
+        }
       }
       receive(on: conn)
     }
@@ -132,6 +139,14 @@ print("      burst of \(total) frames: \(received.count) delivered, \(dropped) s
 server.send(command: ["cmd": "startStream"])
 server.send(command: ["cmd": "stopStream"])
 check(wait(3) { commands == ["startStream", "stopStream"] }, "stream commands reach the phone in order")
+
+// --- Head motion phone -> Mac (companion's FrameSender.sendSmall) and audio relay Mac -> phone ---
+sender.sendSmall(WireCodec.encodeMotion(MotionMessage(qx: 0.1, qy: -0.2, qz: 0.3, qw: 0.927, timestampNs: 123_456_789_012)))
+check(wait(3) { recorder.lock.withLock { recorder.motions.count == 1 } }, "motion (orientation quaternion) messages arrive")
+let m = recorder.lock.withLock { recorder.motions.first }
+check(m.map { $0.qx == 0.1 && $0.qy == -0.2 && $0.qz == 0.3 && $0.qw == 0.927 && $0.timestampNs == 123_456_789_012 } ?? false, "motion quaternion and timestamp decode exactly")
+server.send(json: ["op": "play", "s": "zap", "x": 1.5, "z": 6], type: .audio)
+check(wait(3) { audioMessages.first?["s"] as? String == "zap" }, "audio relay messages reach the phone")
 
 // --- Disconnect detection ---------------------------------------------------------------------
 client.cancel()

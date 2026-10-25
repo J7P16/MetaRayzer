@@ -27,6 +27,7 @@ struct CompanionApp: App {
 final class CompanionModel {
   let glasses = GlassesController()
   let link = MacLink()
+  let audio = CompanionAudio()
   private let encoder = FrameEncoder()
 
   init() {
@@ -43,6 +44,10 @@ final class CompanionModel {
       guard let glasses, let link else { return }
       link.sendStatus(glasses.statusSnapshot())
     }
+    glasses.onMotion = { qx, qy, qz, qw, t in
+      link.send(motion: MotionMessage(qx: qx, qy: qy, qz: qz, qw: qw, timestampNs: t))
+    }
+    link.onAudio = { [audio] message in audio.handle(message) }
     link.statusProvider = { [weak glasses] in glasses?.statusSnapshot() ?? [:] }
     link.onCommand = { [weak glasses] cmd in
       switch cmd {

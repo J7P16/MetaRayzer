@@ -6,6 +6,10 @@ enum HandPose {
   fist,
   open,
 
+  /// Index + middle finger extended, ring + little curled (✌). Used to switch spells; it is
+  /// deliberately neither [fist] nor [open], so it can never arm or fire a cast.
+  victory,
+
   /// Partially open, ambiguous (e.g. two fingers up), or not enough confident joints.
   unknown,
 }
@@ -119,7 +123,16 @@ class PoseClassifier {
     final confidence = (jointConfidence * handConfidence * measured.length / 4).clamp(0.0, 1.0);
 
     final HandPose pose;
-    if (extended >= config.minExtendedForOpen && curled == 0) {
+    final isVictory = extensions.length == 4 &&
+        extensions[0] >= config.fingerExtendedAt &&
+        extensions[1] >= config.fingerExtendedAt &&
+        extensions[2] >= 0 &&
+        extensions[2] <= config.fingerCurledAt &&
+        extensions[3] >= 0 &&
+        extensions[3] <= config.fingerCurledAt;
+    if (isVictory) {
+      pose = HandPose.victory;
+    } else if (extended >= config.minExtendedForOpen && curled == 0) {
       pose = HandPose.open;
     } else if (curled >= config.minCurledForFist && extended == 0) {
       pose = HandPose.fist;

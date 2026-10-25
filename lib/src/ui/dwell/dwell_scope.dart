@@ -26,7 +26,12 @@ class DwellVisual {
 }
 
 /// Hand-controlled UI: draws a hand cursor over its subtree and activates [DwellTarget]s after
-/// the configured dwell time. Mouse input to the subtree is untouched, so clicks always work.
+/// the configured dwell time. Mouse clicks work at the same time.
+///
+/// Both routes go through [DwellScopeState.guardedActivate]: a target activated by either the
+/// mouse or the hand is locked against the hand for the rest of that hover, and any activation
+/// blocks all others for [DwellScope.activationCooldown] (so a click and a dwell completing
+/// together fire once, and a screen transition can't be double-triggered).
 ///
 /// This is the UI interaction system only; in-game gestures are handled separately by the game.
 class DwellScope extends StatefulWidget {
@@ -37,13 +42,22 @@ class DwellScope extends StatefulWidget {
     required this.dwellSeconds,
     required this.child,
     this.mapper = const CursorMapper(),
+    this.onHoverStart,
+    this.onActivated,
   });
+
+  /// Minimum time between any two activations.
+  static const Duration activationCooldown = Duration(milliseconds: 400);
 
   final bool enabled;
   final ValueListenable<HandInputFrame> input;
   final double dwellSeconds;
   final CursorMapper mapper;
   final Widget child;
+
+  /// UI feedback hooks (sounds).
+  final VoidCallback? onHoverStart;
+  final VoidCallback? onActivated;
 
   /// The enclosing scope; registers a dependency so targets rebuild when it is toggled.
   static DwellScopeState? maybeOf(BuildContext context) => context.dependOnInheritedWidgetOfExactType<_DwellInherited>()?.state;
@@ -59,8 +73,25 @@ class DwellScopeState extends State<DwellScope> with SingleTickerProviderStateMi
   late final DwellSelector _selector = DwellSelector(dwellSeconds: widget.dwellSeconds);
   late final Ticker _ticker = createTicker(_onTick);
   Duration _last = Duration.zero;
+  /// Frame time accumulated by this scope's ticker (deterministic, and paused with the scope).
+  double _timeline = 0;
+  double? _lastActivation;
+  Object? _lastHovered;
 
   bool get enabled => widget.enabled;
+
+  /// The single entry point for activating a target, from the mouse or the hand. Returns
+  /// whether the activation happened.
+  bool guardedActivate(Object id, VoidCallback onActivate) {
+    final last = _lastActivation;
+    final cooldown = DwellScope.activationCooldown.inMicroseconds / 1e6;
+    if (widget.enabled && last != null && _timeline - last < cooldown) return false;
+    _lastActivation = _timeline;
+    _selector.lockOn(id);
+    widget.onActivated?.call();
+    onActivate();
+    return true;
+  }
 
   void register(Object id, GlobalKey key, VoidCallback onActivate) => _targets[id] = (key: key, onActivate: onActivate);
   void unregister(Object id) => _targets.remove(id);
@@ -77,6 +108,7 @@ class DwellScopeState extends State<DwellScope> with SingleTickerProviderStateMi
     _selector.dwellSeconds = widget.dwellSeconds;
     if (widget.enabled && !_ticker.isActive) {
       _last = Duration.zero;
+      _lastActivation = null; // a fresh screen context
       _ticker.start();
     } else if (!widget.enabled && _ticker.isActive) {
       _ticker.stop();
@@ -88,6 +120,7 @@ class DwellScopeState extends State<DwellScope> with SingleTickerProviderStateMi
   void _onTick(Duration elapsed) {
     final dt = _last == Duration.zero ? 0.0 : (elapsed - _last).inMicroseconds / 1e6;
     _last = elapsed;
+    _timeline += dt;
     final area = _areaKey.currentContext?.findRenderObject() as RenderBox?;
     if (area == null || !area.hasSize) return;
 
@@ -105,7 +138,12 @@ class DwellScopeState extends State<DwellScope> with SingleTickerProviderStateMi
     }
 
     final activated = _selector.update(cursor, dt.clamp(0.0, 0.1), rects);
-    if (activated != null) _targets[activated]?.onActivate();
+    if (activated != null) {
+      final target = _targets[activated];
+      if (target != null) guardedActivate(activated, target.onActivate);
+    }
+    if (_selector.hovered != null && _selector.hovered != _lastHovered) widget.onHoverStart?.call();
+    _lastHovered = _selector.hovered;
 
     final sinceFlash = _selector.secondsSinceActivation;
     visual.value = DwellVisual(
@@ -193,6 +231,11 @@ class _HandCursorPainter extends CustomPainter {
 class DwellTarget extends StatefulWidget {
   const DwellTarget({super.key, required this.onActivate, required this.child, this.borderRadius = 14});
 
+  /// For a mouse/keyboard press inside a [DwellTarget]: activates it through the shared guard,
+  /// so a simultaneous hand dwell on the same control can't fire it a second time.
+  static void activateFromPointer(BuildContext context) =>
+      context.findAncestorStateOfType<_DwellTargetState>()?._activateFromPointer();
+
   final VoidCallback? onActivate;
   final Widget child;
   final double borderRadius;
@@ -206,6 +249,17 @@ class _DwellTargetState extends State<DwellTarget> {
   DwellScopeState? _scope;
 
   void _activate() => widget.onActivate?.call();
+
+  void _activateFromPointer() {
+    final callback = widget.onActivate;
+    if (callback == null) return;
+    final scope = _scope;
+    if (scope == null) {
+      callback();
+    } else {
+      scope.guardedActivate(this, callback);
+    }
+  }
 
   @override
   void didChangeDependencies() {

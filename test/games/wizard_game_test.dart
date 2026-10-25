@@ -167,7 +167,7 @@ void main() {
     });
 
     test('each enemy type awards its configured score', () {
-      for (final kind in EnemyKind.values) {
+      for (final kind in EnemyKind.values.where((k) => k != EnemyKind.slime)) { // slimes: see wizard_v3_test
         final g = quietGame();
         g.spawn(kind, x: 0).z = 10;
         g.castFireball();
@@ -242,7 +242,7 @@ void main() {
     test('ramps smoothly and monotonically, then plateaus', () {
       final g = WizardGame(seed: 5, config: const WizardConfig(startingLives: 1000000));
       var prevInterval = g.spawnInterval, prevSpeed = g.speedMultiplier, prevMax = g.maxEnemies;
-      expect(g.difficulty, 0);
+      expect(g.difficultyLevel, 0);
       for (var i = 0; i < 300 * 10; i++) {
         g.update(0.1);
         expect(g.spawnInterval, lessThanOrEqualTo(prevInterval + 1e-12));
@@ -253,7 +253,7 @@ void main() {
         prevSpeed = g.speedMultiplier;
         prevMax = g.maxEnemies;
       }
-      expect(g.difficulty, 1);
+      expect(g.difficultyLevel, 1);
       expect(g.spawnWeight(EnemyKind.goblin), greaterThan(g.config.spec(EnemyKind.goblin).spawnWeightStart));
     });
 

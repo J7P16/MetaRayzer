@@ -54,8 +54,12 @@ void main() {
       expect(c.openness, inInclusiveRange(0.3, 0.7));
     });
 
-    test('two fingers up (victory) is unknown', () {
-      expect(classifier.classify(syntheticHand(tipLengths: [0.12, 0.12, -0.04, -0.04])).pose, HandPose.unknown);
+    test('two fingers up is the victory (spell switch) pose, never fist/open', () {
+      expect(classifier.classify(syntheticHand(tipLengths: [0.12, 0.12, -0.04, -0.04])).pose, HandPose.victory);
+    });
+
+    test('one finger up (pointing) is unknown', () {
+      expect(classifier.classify(syntheticHand(tipLengths: [0.12, -0.04, -0.04, -0.04])).pose, HandPose.unknown);
     });
 
     test('rotation and scale invariant', () {

@@ -1,8 +1,11 @@
 import 'package:flutter/widgets.dart';
 
 import '../app/app_settings.dart';
+import '../app/progression.dart';
 import '../app/tracking_controller.dart';
+import '../audio/audio_service.dart';
 import '../input/hand_input_hub.dart';
+import '../input/head_input.dart';
 
 /// Result of one finished run of a minigame.
 @immutable
@@ -23,6 +26,9 @@ class RunResult {
 class MinigameHost {
   const MinigameHost({
     required this.handInput,
+    required this.headInput,
+    required this.audio,
+    required this.progression,
     required this.settings,
     required this.tracking,
     required this.runId,
@@ -32,6 +38,13 @@ class MinigameHost {
 
   /// Hand status, position and pose. The only input a game should need.
   final HandInputHub handInput;
+
+  /// Head orientation (glasses Motion, when available) for view/aim.
+  final HeadInput headInput;
+  final AudioService audio;
+
+  /// Permanent unlocks (separate from settings).
+  final Progression progression;
   final AppSettings settings;
 
   /// Exposed only for optional camera-preview insets; games must not read frames from it.

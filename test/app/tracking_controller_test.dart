@@ -33,6 +33,23 @@ class FakeNative implements MetarayzerNative {
 
   @override
   Future<void> ackFrame() async => acks++;
+
+  final plays = <({String sound, double x, double z, double gain, bool positional})>[];
+  final configs = <Map<String, Object?>>[];
+  final listenerYaws = <double>[];
+
+  @override
+  Future<Map<String, Object?>> audioConfigure({required double sfx, required double ambient, required String mode, required String output, required bool ambientOn}) async {
+    configs.add({'sfx': sfx, 'ambient': ambient, 'mode': mode, 'output': output, 'ambientOn': ambientOn});
+    return {'kind': 'mac', 'name': 'Test speakers'};
+  }
+
+  @override
+  Future<void> audioPlay(String sound, {double x = 0, double y = 1, double z = 1, double gain = 1, bool positional = true}) async =>
+      plays.add((sound: sound, x: x, z: z, gain: gain, positional: positional));
+
+  @override
+  Future<void> audioListener(double yaw) async => listenerYaws.add(yaw);
 }
 
 /// A hand whose 21 joints all sit at (x, y).

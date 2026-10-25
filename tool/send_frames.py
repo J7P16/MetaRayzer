@@ -11,13 +11,14 @@ Implements the framing documented in WireProtocol.swift (protocol version 1).
 """
 import argparse
 import json
+import math
 import socket
 import struct
 import sys
 import threading
 import time
 
-MSG_HELLO, MSG_FRAME, MSG_STATUS, MSG_COMMAND = 1, 2, 3, 4
+MSG_HELLO, MSG_FRAME, MSG_STATUS, MSG_COMMAND, MSG_MOTION, MSG_AUDIO = 1, 2, 3, 4, 5, 6
 
 
 def message(msg_type: int, payload: bytes) -> bytes:
@@ -60,7 +61,9 @@ def read_commands(sock: socket.socket, state: dict) -> None:
             if len(buf) < 4 + length:
                 break
             body, buf = buf[4:4 + length], buf[4 + length:]
-            if body[0] == MSG_COMMAND:
+            if body[0] == MSG_AUDIO:
+                print(f"<- audio relay: {json.loads(body[1:] or b'{}')}")
+            elif body[0] == MSG_COMMAND:
                 cmd = json.loads(body[1:] or b"{}").get("cmd")
                 print(f"<- command from Mac: {cmd}")
                 state["streaming"] = cmd == "startStream"
@@ -75,6 +78,8 @@ def main() -> int:
     ap.add_argument("--loop", action="store_true", help="repeat forever")
     ap.add_argument("--count", type=int, default=0, help="stop after N frames (0 = no limit)")
     ap.add_argument("--wait-for-start", action="store_true", help="only stream after the Mac sends startStream")
+    ap.add_argument("--motion-yaw", type=float, default=0,
+                    help="also send simulated glasses orientation, sweeping yaw by +/- this many degrees (tests head tracking)")
     args = ap.parse_args()
 
     frames = []
@@ -112,6 +117,11 @@ def main() -> int:
             if not state["streaming"]:
                 time.sleep(0.05)
                 continue
+            if args.motion_yaw:
+                # Orientation about +y (right-handed, y up): turning right = negative angle.
+                yaw = math.radians(args.motion_yaw) * math.sin(time.monotonic() * 0.8)
+                q = (0.0, math.sin(-yaw / 2), 0.0, math.cos(-yaw / 2))
+                sock.sendall(message(MSG_MOTION, struct.pack(">ffffq", *q, time.monotonic_ns())))
             data, w, h = frames[seq % len(frames)]
             header = struct.pack(">IQHH", seq & 0xFFFFFFFF, int(time.time() * 1000), w, h)
             sock.sendall(message(MSG_FRAME, header + data))

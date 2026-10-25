@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import MWDATCamera
 import MWDATCore
+import MWDATMotion
 import Observation
 import UIKit
 
@@ -45,6 +46,8 @@ final class GlassesController {
   private(set) var lastError: String?
   private(set) var latestPreview: UIImage?
   private(set) var mockEnabled = false
+  /// Experimental DAT Motion capability state (head orientation for the Mac's view/aim).
+  private(set) var motionState = "off"
   /// The Mac asked to start but we need the user to approve the Meta AI permission switch.
   var needsPermissionConfirmation = false
 
@@ -53,6 +56,8 @@ final class GlassesController {
 
   /// Called on a background queue for every decoded frame.
   @ObservationIgnored nonisolated(unsafe) var onFrame: ((UIImage, UInt64) -> Void)?
+  /// Called on a background task for every glasses orientation sample (quaternion, device ns).
+  @ObservationIgnored nonisolated(unsafe) var onMotion: ((Float, Float, Float, Float, Int64) -> Void)?
   /// Called on the main actor whenever anything the Mac should know about changes.
   @ObservationIgnored var onStatusChange: (() -> Void)?
 
@@ -63,6 +68,9 @@ final class GlassesController {
   @ObservationIgnored private let sessionTokens = ListenerTokenBag()
   @ObservationIgnored private let streamTokens = ListenerTokenBag()
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+  @ObservationIgnored private var motion: Motion?
+  @ObservationIgnored private var motionTask: Task<Void, Never>?
+  @ObservationIgnored private let motionTokens = ListenerTokenBag()
   @ObservationIgnored private var startAfterSession = false
   @ObservationIgnored private var pendingStartUserInitiated = false
   @ObservationIgnored private var lastPreviewAt = Date.distantPast
@@ -213,6 +221,7 @@ final class GlassesController {
     log("session: \(state)")
     switch state {
     case .started:
+      startMotion()
       if startAfterSession, camera == nil, let session {
         startAfterSession = false
         let userInitiated = pendingStartUserInitiated
@@ -224,6 +233,7 @@ final class GlassesController {
       camera = nil
       streamTokens.clear()
       streamState = .stopped
+      stopMotion()
       cleanupSession()
     default:
       break
@@ -311,6 +321,54 @@ final class GlassesController {
     changed()
   }
 
+  // MARK: - Motion (experimental DAT capability)
+
+  /// Streams glasses orientation while the session runs. Motion is experimental in DAT 1.0.x and
+  /// must be enabled for the app in the Wearables Developer Center; if it isn't available the
+  /// Mac simply runs without head tracking.
+  private func startMotion() {
+    guard motion == nil, let session else { return }
+    do {
+      guard let m = try session.addMotion(configuration: MotionConfiguration(samplingRate: .hz30)) else {
+        motionState = "unavailable"
+        return changed()
+      }
+      motion = m
+      m.statePublisher.listen { [weak self] state in
+        Task { @MainActor in
+          self?.motionState = "\(state)"
+          self?.changed()
+        }
+      }.store(in: motionTokens)
+      m.errorPublisher.listen { [weak self] error in
+        Task { @MainActor in
+          self?.motionState = "error: \(error.localizedDescription)"
+          self?.changed()
+        }
+      }.store(in: motionTokens)
+      let samples = m.samples
+      motionTask = Task.detached { [weak self] in
+        for await sample in samples {
+          guard let q = sample.orientation else { continue }
+          self?.onMotion?(q.x, q.y, q.z, q.w, sample.timestampNs)
+        }
+      }
+      m.start()
+    } catch {
+      motionState = "unavailable: \(error.localizedDescription)"
+      log("motion unavailable: \(error)")
+      changed()
+    }
+  }
+
+  private func stopMotion() {
+    motionTask?.cancel()
+    motionTask = nil
+    motionTokens.clear()
+    motion = nil
+    motionState = "off"
+  }
+
   /// Throttled on-phone preview (the Mac is the real display).
   func showPreview(_ image: UIImage) {
     let now = Date()
@@ -367,6 +425,7 @@ final class GlassesController {
       "resolution": resolution.label,
       "fps": Int(frameRate),
       "mock": mockEnabled,
+      "motion": motionState,
     ]
     if let lastError { status["error"] = lastError }
     return status

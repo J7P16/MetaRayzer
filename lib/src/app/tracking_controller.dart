@@ -55,6 +55,12 @@ class TrackingController extends ChangeNotifier {
   String? lastError;
   double? lastErrorAtMs;
 
+  /// Latest glasses orientation sample (experimental DAT Motion via the companion), or null.
+  final ValueNotifier<MotionEvent?> headMotion = ValueNotifier(null);
+
+  /// The native bridge, shared with other services (audio).
+  MetarayzerNative get native => _native;
+
   // ---- Frames and hands ----
   FrameEvent? frame;
   double? _lastFrameAtMs;
@@ -200,6 +206,11 @@ class TrackingController extends ChangeNotifier {
         if (event.error != null) _setError(event.error!, notify: false);
       case ErrorEvent():
         _setError(event.message, notify: false);
+      case MotionEvent():
+        headMotion.value = event;
+        return; // high-rate; consumers listen to [headMotion] directly
+      case AudioRouteEvent():
+        return; // handled by AudioService
     }
     notifyListeners();
   }

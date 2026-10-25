@@ -20,16 +20,25 @@ abstract final class Fantasy {
   static const serif = 'Georgia';
 
   static TextStyle title(double size) => TextStyle(
-        fontFamily: serif,
-        fontSize: size,
-        fontWeight: FontWeight.w700,
-        letterSpacing: size * 0.08,
-        color: gold,
-        shadows: const [Shadow(color: Color(0xAAFF8A3D), blurRadius: 24), Shadow(color: Colors.black, blurRadius: 4, offset: Offset(0, 2))],
-      );
+    fontFamily: serif,
+    fontSize: size,
+    fontWeight: FontWeight.w700,
+    letterSpacing: size * 0.08,
+    color: gold,
+    shadows: const [
+      Shadow(color: Color(0xAAFF8A3D), blurRadius: 24),
+      Shadow(color: Colors.black, blurRadius: 4, offset: Offset(0, 2)),
+    ],
+  );
 
   static const TextStyle body = TextStyle(fontFamily: serif, fontSize: 15, color: parchment, height: 1.35);
-  static TextStyle label = TextStyle(fontFamily: serif, fontSize: 12, letterSpacing: 2, color: mist.withValues(alpha: 0.9), fontWeight: FontWeight.w600);
+  static TextStyle label = TextStyle(
+    fontFamily: serif,
+    fontSize: 12,
+    letterSpacing: 2,
+    color: mist.withValues(alpha: 0.9),
+    fontWeight: FontWeight.w600,
+  );
 }
 
 /// Starry night background with a glowing horizon, shared by all menu screens.
@@ -63,7 +72,13 @@ class _SkyPainter extends CustomPainter {
       canvas.drawCircle(p, rng.nextDouble() * 1.4 + 0.3, star);
     }
     final moon = Offset(size.width * 0.82, size.height * 0.18);
-    canvas.drawCircle(moon, 90, Paint()..shader = RadialGradient(colors: [const Color(0x55FFE6B0), const Color(0x00FFE6B0)]).createShader(Rect.fromCircle(center: moon, radius: 90)));
+    canvas.drawCircle(
+      moon,
+      90,
+      Paint()
+        ..shader = RadialGradient(colors: [const Color(0x55FFE6B0), const Color(0x00FFE6B0)])
+            .createShader(Rect.fromCircle(center: moon, radius: 90)),
+    );
     canvas.drawCircle(moon, 34, Paint()..color = const Color(0xFFFFF1D0));
     canvas.drawCircle(moon + const Offset(11, -7), 30, Paint()..color = const Color(0xFF1A0F33).withValues(alpha: 0.92));
     // Distant mountains.
@@ -93,14 +108,14 @@ class FantasyPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xCC160C2C),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Fantasy.goldDeep.withValues(alpha: 0.6), width: 1.5),
-          boxShadow: const [BoxShadow(color: Color(0x88000000), blurRadius: 30, offset: Offset(0, 10))],
-        ),
-        child: Padding(padding: padding, child: child),
-      );
+    decoration: BoxDecoration(
+      color: const Color(0xCC160C2C),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Fantasy.goldDeep.withValues(alpha: 0.6), width: 1.5),
+      boxShadow: const [BoxShadow(color: Color(0x88000000), blurRadius: 30, offset: Offset(0, 10))],
+    ),
+    child: Padding(padding: padding, child: child),
+  );
 }
 
 /// Large gold button; hand-dwell selectable via [DwellTarget], mouse/keyboard via InkWell.
@@ -131,27 +146,34 @@ class FantasyButton extends StatelessWidget {
             border: Border.all(color: (primary ? Fantasy.gold : Fantasy.goldDeep).withValues(alpha: enabled ? 0.9 : 0.3), width: 1.5),
             boxShadow: primary && enabled ? const [BoxShadow(color: Color(0x88FF8A3D), blurRadius: 22)] : null,
           ),
-          child: InkWell(
-            borderRadius: radius,
-            onTap: onPressed,
-            child: Padding(
-              padding: compact ? const EdgeInsets.symmetric(horizontal: 14, vertical: 9) : const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (icon != null) ...[
-                  Icon(icon, size: compact ? 18 : 24, color: primary ? const Color(0xFF2A1205) : Fantasy.gold),
-                  SizedBox(width: compact ? 6 : 10),
-                ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontFamily: Fantasy.serif,
-                    fontSize: compact ? 14 : 20,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: compact ? 0.5 : 1.5,
-                    color: primary ? const Color(0xFF2A1205) : Fantasy.parchment.withValues(alpha: enabled ? 1 : 0.4),
-                  ),
+          child: Builder(
+            builder: (inner) => InkWell(
+              borderRadius: radius,
+              onTap: enabled ? () => DwellTarget.activateFromPointer(inner) : null,
+              child: Padding(
+                padding: compact
+                    ? const EdgeInsets.symmetric(horizontal: 14, vertical: 9)
+                    : const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, size: compact ? 18 : 24, color: primary ? const Color(0xFF2A1205) : Fantasy.gold),
+                      SizedBox(width: compact ? 6 : 10),
+                    ],
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontFamily: Fantasy.serif,
+                        fontSize: compact ? 14 : 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: compact ? 0.5 : 1.5,
+                        color: primary ? const Color(0xFF2A1205) : Fantasy.parchment.withValues(alpha: enabled ? 1 : 0.4),
+                      ),
+                    ),
+                  ],
                 ),
-              ]),
+              ),
             ),
           ),
         ),
@@ -169,16 +191,20 @@ class FantasyChoice<T> extends StatelessWidget {
   final ValueChanged<T> onSelected;
 
   @override
-  Widget build(BuildContext context) => Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final MapEntry(:key, :value) in options.entries)
-          DwellTarget(
-            onActivate: () => onSelected(key),
-            borderRadius: 10,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      for (final MapEntry(:key, :value) in options.entries)
+        DwellTarget(
+          onActivate: () => onSelected(key),
+          borderRadius: 10,
+          child: Material(
+            color: Colors.transparent,
+            child: Builder(
+              builder: (inner) => InkWell(
                 borderRadius: BorderRadius.circular(10),
-                onTap: () => onSelected(key),
+                onTap: () => DwellTarget.activateFromPointer(inner),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -192,7 +218,9 @@ class FantasyChoice<T> extends StatelessWidget {
               ),
             ),
           ),
-      ]);
+        ),
+    ],
+  );
 }
 
 /// Top-3 list.
@@ -208,25 +236,33 @@ class LeaderboardList extends StatelessWidget {
       return Text('No scores yet. Be the first wizard to hold the line.', style: Fantasy.body.copyWith(color: Fantasy.mist));
     }
     const medals = [Color(0xFFFFD27A), Color(0xFFD9DDE6), Color(0xFFD6955B)];
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      for (var i = 0; i < scores.length; i++)
-        Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            color: highlightRank == i + 1 ? Fantasy.gold.withValues(alpha: 0.16) : const Color(0x22FFFFFF),
-            border: highlightRank == i + 1 ? Border.all(color: Fantasy.gold) : null,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < scores.length; i++)
+          Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: highlightRank == i + 1 ? Fantasy.gold.withValues(alpha: 0.16) : const Color(0x22FFFFFF),
+              border: highlightRank == i + 1 ? Border.all(color: Fantasy.gold) : null,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.local_fire_department, color: medals[i % 3], size: 20),
+                const SizedBox(width: 10),
+                Text(
+                  '#${i + 1}',
+                  style: Fantasy.body.copyWith(color: medals[i % 3], fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text('${scores[i]}', style: Fantasy.body.copyWith(fontSize: 18, fontWeight: FontWeight.w700)),
+                if (highlightRank == i + 1) ...[const SizedBox(width: 8), Text('this run', style: Fantasy.label)],
+              ],
+            ),
           ),
-          child: Row(children: [
-            Icon(Icons.local_fire_department, color: medals[i % 3], size: 20),
-            const SizedBox(width: 10),
-            Text('#${i + 1}', style: Fantasy.body.copyWith(color: medals[i % 3], fontWeight: FontWeight.w700)),
-            const Spacer(),
-            Text('${scores[i]}', style: Fantasy.body.copyWith(fontSize: 18, fontWeight: FontWeight.w700)),
-            if (highlightRank == i + 1) ...[const SizedBox(width: 8), Text('this run', style: Fantasy.label)],
-          ]),
-        ),
-    ]);
+      ],
+    );
   }
 }

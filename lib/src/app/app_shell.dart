@@ -4,12 +4,13 @@ import 'package:flutter/services.dart';
 import '../platform/app_navigator.dart';
 import '../platform/minigame.dart';
 import '../ui/dwell/dwell_scope.dart';
+import '../ui/camera_stream_indicator.dart';
 import '../ui/home_page.dart';
 import '../ui/menu/fantasy_theme.dart';
 import '../ui/menu/game_over_screen.dart';
+import '../ui/menu/settings_screen.dart';
 import '../ui/menu/start_menu.dart';
 import 'app_services.dart';
-import 'app_settings.dart';
 
 /// Root of the game platform: routes between screens, hosts the hand-dwell UI layer, feeds the
 /// development simulated hand from the mouse/keyboard, and handles global keys (Esc).
@@ -45,13 +46,13 @@ class _AppShellState extends State<AppShell> {
         s.navigator.quitRun();
         return true;
       }
-      if (route is SetupRoute) {
+      if (route is SetupRoute || route is SettingsRoute) {
         s.navigator.openStartMenu();
         return true;
       }
     }
     // Simulated hand (dev): Space or F held = fist.
-    if (s.settings.simulatedHand && (key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.keyF)) {
+    if (s.settings.simulatedInput && (key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.keyF)) {
       if (event is KeyDownEvent) s.simulated.setFist(true);
       if (event is KeyUpEvent) s.simulated.setFist(false);
       return s.navigator.route is PlayingRoute; // don't steal Space from focused menu buttons
@@ -60,7 +61,7 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _pointer(PointerEvent e, {bool? down}) {
-    if (!s.settings.simulatedHand) return;
+    if (!s.settings.simulatedInput) return;
     final box = _areaKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
     final local = box.globalToLocal(e.position);
@@ -76,7 +77,9 @@ class _AppShellState extends State<AppShell> {
         listenable: Listenable.merge([s.navigator, s.settings]),
         builder: (context, _) {
           final route = s.navigator.route;
-          final handUi = s.settings.uiControlMode == UiControlMode.hand && route is! PlayingRoute;
+          // Mouse and hand navigation are both always on; hand dwell pauses during gameplay,
+          // where the hand casts spells instead.
+          final handUi = route is! PlayingRoute;
           return Listener(
             key: _areaKey,
             behavior: HitTestBehavior.translucent,
@@ -90,10 +93,15 @@ class _AppShellState extends State<AppShell> {
                 enabled: handUi,
                 input: s.handInput,
                 dwellSeconds: s.settings.dwellSeconds,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
-                  child: KeyedSubtree(key: ValueKey(_routeKey(route)), child: _screenFor(route)),
-                ),
+                onHoverStart: s.audio.uiHover,
+                onActivated: s.audio.uiSelect,
+                child: Stack(fit: StackFit.expand, children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 350),
+                    child: KeyedSubtree(key: ValueKey(_routeKey(route)), child: _screenFor(route)),
+                  ),
+                  if (route is! PlayingRoute) Positioned(top: 10, right: 16, child: CameraStreamIndicator(tracking: s.tracking)),
+                ]),
               ),
             ),
           );
@@ -114,6 +122,9 @@ class _AppShellState extends State<AppShell> {
             context,
             MinigameHost(
               handInput: s.handInput,
+              headInput: s.headInput,
+              audio: s.audio,
+              progression: s.progression,
               settings: s.settings,
               tracking: s.tracking,
               runId: runId,
@@ -123,6 +134,7 @@ class _AppShellState extends State<AppShell> {
           ),
         GameOverRoute() => GameOverScreen(route: route),
         SetupRoute() => _SetupScreen(services: s),
+        SettingsRoute() => const SettingsScreen(),
       };
 }
 

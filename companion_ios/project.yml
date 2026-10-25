@@ -37,4 +37,6 @@ targets:
       - package: MetaWearablesDAT
         product: MWDATCamera
       - package: MetaWearablesDAT
+        product: MWDATMotion
+      - package: MetaWearablesDAT
         product: MWDATMockDevice

@@ -80,6 +80,7 @@ struct ContentView: View {
       LabeledContent("Device", value: glasses.hasActiveDevice ? glasses.deviceDescription : "none")
       LabeledContent("Camera permission", value: glasses.permission)
       LabeledContent("Session", value: glasses.sessionState.description)
+      LabeledContent("Head motion (experimental)", value: glasses.motionState)
       if glasses.isRegistered {
         Button("Disconnect glasses from MetaRayzer", role: .destructive) { glasses.unregister() }
       } else {

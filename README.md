@@ -1,8 +1,18 @@
 # MetaRayzer
 
 A **Flutter macOS** hand-gesture game platform driven by the camera of **Ray-Ban Meta (Gen 2)**
-glasses. Its first minigame is **Wizard's Stand**, a first-person wizard shooter: close your left
-hand into a fist to ready a spell, snap it open to throw a fireball at the nearest enemy.
+glasses. Its first minigame is **Wizard's Stand**, a first-person wizard shooter. You hold a staff
+in your left hand: close the hand into a fist to ready a spell, then snap it open to cast. The
+spells are a homing **Fireball** and, once unlocked, an aimed **Chain Lightning**.
+
+Version 3 adds:
+- a staff that follows your hand and aims
+- head movement (glasses orientation) that turns the view
+- spatial sound with routing to the glasses
+- a deeper, animated arena
+- stronger difficulty progression
+- the **Splitting Slime** enemy
+- the permanently unlockable **Chain Lightning**
 
 Under the game is the real-time hand-tracking pipeline. It detects and tracks up to two hands,
 computes each hand's position relative to the center of the camera frame, and classifies the hand
@@ -31,18 +41,22 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 3. [Meta developer and glasses setup (manual)](#meta-developer-and-glasses-setup-manual)
 4. [Install and run](#install-and-run)
 5. [Playing Wizard's Stand](#playing-wizards-stand)
-6. [Game rules and tuning](#game-rules-and-tuning)
-7. [Game platform architecture](#game-platform-architecture)
-8. [Using the tracking setup screen](#using-the-tracking-setup-screen)
-9. [Verifying hand detection](#verifying-hand-detection)
-10. [Architecture](#architecture)
-11. [Coordinate system](#coordinate-system)
-12. [Hand-detection model](#hand-detection-model)
-13. [Tracking](#tracking)
-14. [Testing](#testing)
-15. [Troubleshooting](#troubleshooting)
-16. [Known limitations and future work](#known-limitations-and-future-work)
-17. [Platform constraints and verification](#platform-constraints-and-verification)
+6. [Spells](#spells)
+7. [Game rules and tuning](#game-rules-and-tuning)
+8. [Head movement](#head-movement)
+9. [Audio](#audio)
+10. [Settings and persistence](#settings-and-persistence)
+11. [Game platform architecture](#game-platform-architecture)
+12. [Using the tracking setup screen](#using-the-tracking-setup-screen)
+13. [Verifying hand detection](#verifying-hand-detection)
+14. [Architecture](#architecture)
+15. [Coordinate system](#coordinate-system)
+16. [Hand-detection model](#hand-detection-model)
+17. [Tracking](#tracking)
+18. [Testing](#testing)
+19. [Troubleshooting](#troubleshooting)
+20. [Known limitations and future work](#known-limitations-and-future-work)
+21. [Platform constraints and verification](#platform-constraints-and-verification)
 
 ---
 
@@ -56,17 +70,28 @@ Ray-Ban Meta ──Bluetooth/Wi-Fi──▶ iPhone companion ──local Wi-Fi (
 | Overlay mapping on real frames: letterboxed, cropped and mirrored, and rotated views | ✅ verified (rendered the real UI widget with a real frame and inspected the output) |
 | Full Mac pipeline throughput (two hands, 638×1000 frames) | ✅ 24.0 fps in, 24.0 fps processed, 0 dropped, ~11 ms detection |
 | Coordinate math, view mapping, tracker, smoothing, controller | ✅ unit tests |
-| **Wizard's Stand**: game rules, all four enemy types, targeting, scoring, lives, difficulty | ✅ unit tests (`test/games/`) |
+| **Wizard's Stand**: game rules, all enemy types, fireball targeting, scoring, lives, difficulty | ✅ unit tests (`test/games/`) |
 | Fist / open-palm classifier on **real Apple Vision landmarks** (open palms, fist, pointing, victory) | ✅ `test/input/pose_classifier_test.dart` with `test/fixtures/real_hand_landmarks.json` |
 | Cast gesture: one fist→open = one fireball, no repeat while open, re-arm on fist, no casts from dropouts | ✅ unit tests + app-level widget test |
 | Start Menu → Play → Game Over → Play Again / Start Menu, mouse and hand-dwell selection, leaderboard | ✅ widget tests (`test/app/app_flow_test.dart`) |
 | **Built release app, end to end with real frames**: native Vision → classifier → dwell-select PLAY → two fist→open transitions = exactly two fireballs → run ends → Game Over → score persisted and reloaded after restart | ✅ verified (`send_frames.py` streaming composited real hand photos into the running app) |
-| Full test suite | ✅ 125 Dart tests, `flutter analyze` clean, link self-test passing |
+| **v3** difficulty controller, Splitting Slime (split, limits, family scoring), Chain Lightning (aim path, range, chain radius, falloff, once-per-enemy, cooldown), unlock event, spell switching | ✅ unit tests (`test/games/wizard_v3_test.dart`) |
+| **v3** ✌ (V sign) pose on real Vision landmarks; spell-switch hold/release; head tracker baseline, dropout and recenter with no jumps; sensitivity math; staff mapping, clamping and smoothing | ✅ unit tests (`test/input/`) |
+| **v3** mouse + hand navigation together; a click and a dwell on the same button fire once | ✅ widget test (`test/ui/dwell_guard_test.dart`) |
+| **v3** unlock reached in a run is persisted, and Q switches spells | ✅ widget test (`test/app/app_flow_test.dart`) |
+| **v3** settings (head sensitivity, volumes, spatial mode, output) persist; reset keeps unlocks | ✅ unit tests |
+| **v3** camera-stream indicator states (connected / live / stalled / stopped / dev) | ✅ unit tests (`test/ui/camera_stream_indicator_test.dart`) |
+| **v3** spatial audio: all 22 synthesized sounds, left/right placement (stereo and binaural), distance falloff, listener turning, volume | ✅ verified offline by rendering the real engine (`tool/audio_probe.sh`). Not listened to by a person. |
+| **v3** built release app end to end: hand-dwell starts the game, exactly one cast per fist→open, relayed glasses orientation → `head tracking: tracking` → `lost` on disconnect, audio on the Mac speakers, **"Glasses via iPhone" relay** sends positioned sound events to the phone side and falls back to the Mac when it disconnects | ✅ verified with `send_frames.py --motion-yaw` standing in for the companion |
+| **v3** companion compiles with `MWDATMotion` + audio playback; motion and audio messages round-trip | ✅ build + `tool/link_selftest.sh` |
+| Full test suite | ✅ 179 Dart tests, `flutter analyze` clean, link self-test, audio probe |
 | iPhone companion compiles against Meta DAT **1.0.1** (Debug and Release, `generic/platform=iOS`) | ✅ verified |
 | Companion ↔ Mac protocol (the companion's own `FrameSender` against the Mac's `FrameServer`) | ✅ verified (`tool/link_selftest.sh`) |
 | **Companion running on a physical iPhone with physical Ray-Ban Meta Gen 2 glasses** | ⚠️ **not verified.** No phone or glasses were available while building this. Needs the manual steps below. |
 | MockDeviceKit (iPhone-camera) mode on a physical iPhone | ⚠️ not verified (same reason) |
 | **Left-hand casting seen through the glasses' own camera** (first-person view, fingers up) | ⚠️ **not verified on glasses**. Validated on photos and the Mac webcam path only. See [limitations](#known-limitations-and-future-work). |
+| **Head tracking from real glasses** (DAT Motion, experimental) | ⚠️ **not verified**. Implemented against DAT 1.0.1's `MWDATMotion`; the quaternion axis convention is undocumented (there's an *Invert head direction* setting). |
+| **Audio actually heard through the glasses** (via the iPhone relay, or the glasses as a Mac audio device) | ⚠️ **not verified**. See [Audio](#audio). |
 
 The parts that need hardware use Meta's official API exactly as Meta's `CameraAccess` sample does
 (DAT 1.0.1). The first run on real hardware is still the remaining acceptance step. See
@@ -95,6 +120,7 @@ The parts that need hardware use Meta's official API exactly as Meta's `CameraAc
 | Apple Team ID | Installing the companion on an iPhone | Xcode > Settings > Accounts |
 | Meta AI **Developer Mode** | Running an unpublished DAT app (no Meta credentials needed) | Meta AI app (steps below) |
 | Meta App ID + Client Token | Only for release-channel distribution, not for development | [Wearables Developer Center](https://wearables.developer.meta.com/) |
+| **Motion** capability enabled for the app | Head tracking (optional; the game works without it) | Wearables Developer Center (Motion is experimental in DAT 1.0.x) |
 
 ---
 
@@ -110,6 +136,9 @@ These steps need the physical glasses and phone. They can't be automated.
    [Wearables Developer Center](https://wearables.developer.meta.com/), then put the App ID and Client Token into
    `companion_ios/Config.xcconfig` (`META_APP_ID`, `CLIENT_TOKEN`). In Developer Mode leave them empty: the SDK
    skips attestation when `MetaAppID` is empty or `0`.
+5. *(Optional, for head tracking)* Enable the experimental **Motion** capability for the app in the Wearables Developer
+   Center. Experimental capabilities can be built and tested but not published. Without it, the companion shows
+   *Head motion: unavailable* and the game aims with the hand only.
 
 ---
 
@@ -132,7 +161,7 @@ flutter run -d macos
 ```
 
 The app opens on the **Wizard's Stand** Start Menu. Press **PLAY** with the mouse to try it right
-away; without glasses, use **Simulated hand (dev)** or the Mac webcam source (see
+away; without glasses, use **Simulated input (dev)** or the Mac webcam source (see
 [Playing Wizard's Stand](#playing-wizards-stand)).
 
 or build a release app at `build/macos/Build/Products/Release/metarayzer.app`:
@@ -195,53 +224,108 @@ registration, device, permission and stream.
 
 ```
 Start Menu ──PLAY──▶ Wizard's Stand ──3 hits──▶ Game Over ──PLAY AGAIN──▶ Wizard's Stand
-    ▲                      │ Esc (quit, not recorded)        └──START MENU──▶ Start Menu
-    └──────────────────────┘
+    │  ▲                   │ Esc (quit, not recorded)        └──START MENU──▶ Start Menu
+    │  └───────────────────┘
+    └──Settings / Glasses & tracking setup (Esc or Back returns)
 ```
 
 The **Start Menu** shows:
-- the title and the **PLAY** button
-- glasses and hand-detection status, with buttons for **Start glasses camera**, **Glasses & tracking setup** (the original tracking view) and **Simulated hand (dev)**
-- the menu-control mode, the casting-hand preference, and the **top 3** scores
+- the title, **PLAY** and **Settings**
+- glasses and hand-detection status
+- the spellbook, including Chain Lightning's lock state
+- the top-3 leaderboard
 
-### Menu control (Start Menu → *Menu control*)
+A **camera-stream indicator** (top-right of every screen) shows:
+- **LIVE · Glasses camera streaming to MetaRayzer** while frames arrive
+- *Glasses connected · camera off* when the phone is connected but the stream is stopped
+- *stalled* when the stream should be running but no frames come
+- *DEV camera feed* for the webcam or mock feeds
 
-| Mode | How |
-|---|---|
-| **Mouse & keyboard** (default) | Click buttons. Keyboard focus (Tab, then Enter/Space) uses standard Flutter button behavior; it isn't separately tested. Always available, even with the glasses disconnected. |
-| **Hand (hover to select)** | A glowing cursor follows your hand. Hold it over a button: a ring fills, and the button activates after the **hover time** (default **1.0 s**, adjustable 0.4–3 s with − / +). Moving off resets the timer, and one continuous hover activates a button only once. Mouse clicks keep working in this mode. |
+Nothing is shown with no device. It reflects **this app's** camera stream only. It doesn't
+read or control the glasses' own capture LED, which Meta manages on the device; the toolkit has
+no API for it.
 
-Only the central 60% × 70% of the camera view maps to the whole window, so small hand movements
-reach every button and the hand never needs to approach the frame edge (the glasses camera's view
-is narrow). Hand-dwell selection is off during gameplay, where the hand is used for casting.
+### Navigating menus: mouse and hand, both always on
 
-### Casting (in game)
+- **Mouse/keyboard:** click as usual.
+- **Hand:** a glowing cursor follows your hand. Hold it over a button until the ring fills (hover
+  time 1.0 s by default, adjustable in Settings). Moving off resets it, and one continuous hover
+  activates a button only once.
 
-1. Raise your **left hand** into the glasses' view, **fingers pointing up** (like a "stop" sign, seen from behind).
-2. Close it into a **fist**: the orb at the bottom-left turns ice-blue, *"Ready"*.
-3. Snap it **open**: one fireball flies to the **nearest enemy inside the glowing rune line** (fireball range). The orange reticle shows who will be hit.
-4. Holding the palm open does nothing more (*"Close your fist to ready again"*). Close it to re-arm.
+Both inputs go through one activation guard. A button activated by either input is locked
+against the hand for the rest of that hover, and any activation blocks all others for 0.4 s. So a
+click and a dwell landing together fire **once**, and a screen transition can't be
+double-triggered. Hand navigation pauses during gameplay, where your hand casts spells instead.
 
-The orb at the bottom-left shows the hand state: *looking for hand* (dashed), *make a fist*,
-*ready*, *casting* (orange charge ring as the hand opens), *spent*. Below it, **seen: fist/open/unknown**
-shows what the camera currently classifies. If no hand is seen for 2 s, a banner asks you to raise
-your hand. If the camera stream is unavailable, a banner says why. The game is never paused
-automatically. A small camera inset (bottom-right; Start Menu → *Camera view in game*) shows what the camera
-sees, so you can keep your hand in frame.
+### The staff and aiming
 
-**Keys:** `Esc` leaves a run (not recorded) or the setup screen.
+You hold a **staff in your left hand** at the lower-left of the view (the left hand is the only
+casting hand). Its tip follows your tracked hand continuously:
+- One-Euro smoothing (tunable in `AimConfig`) removes jitter without noticeable lag.
+- Movement is clamped to the lower-left region, so the staff never leaves the screen.
+- With no hand, it holds for 0.5 s and then sinks to a rest pose.
 
-**Casting hand:** *Left* (default), *Right* or *Either*. The game follows one hand and sticks with it
-while it's visible. Vision's left/right label isn't fully reliable, so if no hand with the
-preferred label is visible, the largest visible hand is used.
+The crystal shows the selected spell's color, glows as your hand opens (charge), and flashes and
+recoils when a cast fires. Damage tints and shakes it.
+
+**Aim** goes through the same coordinate chain as the menu cursor, so "hand in the middle"
+means the same thing everywhere:
+
+display-normalized hand position → central interaction box (0–1, clamped) → hand yaw = ±32° across the box
+
+**world aim yaw = head view yaw + hand yaw.** The scene turns by the head view yaw, so the aim
+stays attached to the staff whichever way you look.
+- **Fireball** mode: a faint aim mark, and an orange reticle on the auto-target.
+- **Chain Lightning** mode: a dashed cyan beam from the staff, and a reticle on the exact enemy the
+  cast would hit (computed by the same function the cast uses).
+
+### Casting (left hand, fingers pointing up)
+
+1. **Fist** → the spell is ready (crystal glows; *"Ready: open your palm to cast"*).
+2. **Open palm** → one cast of the selected spell.
+3. Holding the palm open does nothing more. Close your fist to re-arm.
+4. Hold a **V sign** (index + middle up, ring + little curled) for about 0.45 s to **switch spells**.
+   It's neither fist nor open, so it can never cast. After a switch, a fresh fist is required.
+
+Labels under the staff show the gesture state and **seen: fist/open/victory/unknown**.
+
+**Keys:** `Q`/`Tab` switch spells · `R` recenter the head · `Esc` leave the run (not recorded).
 
 ### Playing without glasses (development)
 
 | Option | What it is |
 |---|---|
-| **Simulated hand (dev)** (Start Menu) | Mouse = hand position, **hold the mouse button or Space/F = fist**, release = open palm. It goes through the same hand-input interface, recognizer and game as camera input, and is labeled **SIMULATED HAND (dev)** on screen. It is never re-enabled on launch. |
-| **Mac webcam** (Glasses & tracking setup → Source) | The real camera pipeline (Vision → classifier) using the Mac's camera. It's badged *DEV FALLBACK*. Turn on *Mirror preview* for a selfie view. |
-| `tool/send_frames.py` | Streams JPEGs into the running app over the real network link (labeled MOCK). |
+| **Simulated input (dev)** (Start Menu) | Mouse = hand position; hold the mouse button or **Space/F** = fist; hold **V** = V sign; **arrow keys** = head turn. It goes through the same input interfaces, recognizers and game as the real inputs, is labeled **SIMULATED INPUT (dev)** on screen, and is never re-enabled on launch. |
+| **Mac webcam** (Glasses & tracking setup → Source) | The real camera pipeline (Vision → classifier) on the Mac camera, badged *DEV*. |
+| `tool/send_frames.py` | Streams JPEGs into the running app over the real link. `--motion-yaw 20` also sends glasses-style orientation, to exercise head tracking. Relayed audio events are printed. |
+
+---
+
+## Spells
+
+The **spell book** in `WizardGame` lists the spells; adding a spell means adding an id in
+`SpellIds`, its spec in `wizard_config.dart`, and a cast method. The gesture recognizers don't
+change.
+
+| Spell | How it targets | Damage | Unlock |
+|---|---|---|---|
+| **Fireball** (default) | **Unchanged from v2:** homes in on the nearest living enemy within 20 u, skipping enemies already doomed by fireballs in flight. Ignores the aim (with no target it flies out along the aim and fizzles). | 1 | always |
+| **Chain Lightning** | **Aimed:** the first living enemy whose distance from the aim ray is ≤ 1.4 u, within 24 u. Then it arcs to the nearest not-yet-hit enemy within **5 u** of the previous one. | 2.0, then ×0.6 per link (2.0 → 1.2 → 0.72 → 0.43); up to 4 targets / 3 jumps; 1.5 s cooldown | Score **300** in a single run, **permanently** |
+
+Chain Lightning resolves its damage instantly, exactly once per enemy per cast (a visited set).
+Slimes split by the cast can't be chained to in the same cast. Score is awarded only for enemies
+actually defeated. The visuals and sounds (jagged arcs appearing link by link, impact flashes,
+staggered zaps that follow the chain) are driven by an event describing the already-resolved
+outcome, so effects can never apply damage. With no enemy on the path, nothing is damaged and the
+bolt fizzles along the aim.
+
+**Unlock:** the moment the run's score reaches the threshold, the game emits *SpellUnlocked* once.
+The screen shows the **CHAIN LIGHTNING UNLOCKED** banner, plays a fanfare, and writes the unlock
+to local storage. Later runs start with it available. The threshold is
+`ChainLightningSpec.unlockScore`.
+
+**Switching:** hold a V sign, press **Q**/**Tab**, or click a card in the spell bar
+(bottom-center: selected spell, lock state, cooldown ring, and switch progress).
 
 ---
 
@@ -250,39 +334,179 @@ preferred label is visible, the largest visible hand is used.
 All numbers are in **`lib/src/games/wizard/wizard_config.dart`**. Nothing gameplay-related is
 hard-coded elsewhere.
 
-**World:** the player stands at the origin facing +z. Enemies spawn **32 units** away (lateral
-offset up to ±5) and walk straight toward the player. Every distance (fireball range, melee reach,
-archer stand-off) is the same Euclidean distance √(x² + z²).
+**World:** the player stands at the origin facing +z. Enemies spawn **32 u** away (lateral offset up
+to ±5) and walk straight toward the player. Every distance (fireball and lightning range, melee
+reach, archer stand-off, chain radius) is the same Euclidean distance √(x² + z²). The renderer
+projects those same coordinates, so on-screen distance always matches gameplay distance.
 
 | Enemy | Movement | Attack | Score | Spawn weight (start → full difficulty) |
 |---|---|---|---|---|
-| **Troll** | Slow steady walk, 1.9 u/s | Raises its club for **0.9 s** (red "!" telegraph), then strikes at 2.4 u | **10** | 0.55 → 0.20 |
-| **Goblin** | Fast run with a slight weave, 5.2 u/s | Quick **0.45 s** wind-up at 1.9 u | **25** | 0.12 → 0.32 |
-| **Hopping Frog** | Moves only while airborne: 0.45 s hops, 0.55 s rests, random sideways shift per hop (avg 3.2 u/s) | 0.5 s wind-up at 1.9 u | **20** | 0.25 → 0.25 |
-| **Skeleton Archer** (the 4th type) | Slow walk (1.5 u/s); **stops at 14 u**, inside fireball range, so it can always be killed | Every **3.4 s**, a visible **bow draw (0.9 s)** then an arrow (10 u/s, ~1.4 s flight, red glow + warning ring) | **30** | 0.08 → 0.23 |
+| **Troll** | Slow steady walk, 1.9 u/s | Club wind-up (red "!" telegraph), strikes at 2.4 u | **10** | 0.50 → 0.16 |
+| **Goblin** | Fast run with a weave, 5.2 u/s | Quick wind-up at 1.9 u | **25** | 0.12 → 0.28 |
+| **Hopping Frog** | Moves only while airborne (0.45 s hops, 0.55 s rests), random sideways shift per hop | Wind-up at 1.9 u | **20** | 0.22 → 0.18 |
+| **Skeleton Archer** | Slow walk, **stops at 14 u** (inside fireball range) | Bow draw, then a visible arrow; interval shrinks with difficulty | **30** | 0.06 → 0.20 |
+| **Splitting Slime** *(new)* | Pulsing ooze (fast stretch, slow gather), 2.2 u/s average | Wind-up at 1.9 u | **60 family bonus** | 0.10 → 0.18 |
 
-- **Lives:** 3. A melee enemy strikes **once** and is then removed. Arrows hit once. After losing a
-  life, other hits within **0.6 s** still resolve their attackers but don't cost a second life, so
-  one swarm can't take two lives at once. At 0 lives the simulation freezes and the results screen opens.
-- **Fireballs:** range **20 u**, speed 48 u/s, damage 1. Enemies have 1 HP, but health, damage
-  and `incomingDamage` are modeled, so stronger enemies or spells only need config changes. A
-  fireball homes in on its target. Rapid casts skip enemies already doomed by a fireball in flight.
-  With no enemy in range, the fireball flies to the rune line and fizzles: no damage, no points.
-- **Scoring:** points are awarded once per enemy (guarded by `Enemy.scored`), only when a fireball
-  defeats it. An enemy killed during its wind-up never lands its hit.
-- **Difficulty:** smoothstep ramp over **180 s** of survival. It then stays at maximum.
-  - spawn interval: 2.6 s → 0.95 s
-  - simultaneous enemies: 3 → 7
-  - enemy speed: ×1.0 → ×1.35
-  - spawn mix shifts toward goblins and archers
+**Splitting Slime rules (`SlimeSpec`):**
+- **Split:** any hit (fireball or lightning) on a big slime splits it into **2 smaller slimes**
+  (0.6× size, 1.35× faster). They land slightly farther back and spread apart, and each is an
+  independent enemy.
+- **Limits:**
+  - `maxSplitDepth` = 1: the small ones die normally when hit.
+  - `maxActiveSlimes` = 8: a hit that would exceed the cap kills the slime outright instead of
+    splitting it.
+  - The spawner won't add a big slime if its children could exceed the cap.
+- **Scoring rule:** the slime family (the original slime plus everything split from it) awards its
+  **60 points once, when its last member is defeated** by the player. Splitting awards nothing.
+  If any family member reaches you and strikes, the family awards nothing. Repeated hits or state
+  changes can't award twice, because a family has a one-time `awarded` flag and each enemy has a
+  `scored` flag. Small slimes still count toward "enemies defeated".
 
-  There are no sudden jumps (tested), and the game is endless.
+**Lives:** 3. A melee enemy strikes **once** and is then removed; arrows hit once. Other hits within
+**0.6 s** of losing a life still resolve but don't cost another life. At 0 lives the simulation
+freezes and the results screen opens.
 
-**Leaderboard:** the top **3** completed runs, persisted locally with `shared_preferences`
-(NSUserDefaults in the app's sandbox container). It survives restarts and is shown on the Start
-Menu and Game Over screen, with this run highlighted. Equal scores from separate runs are kept
-separately; a new run must *beat* a score to push it out. Aborted runs (Esc) aren't recorded. Menu
-settings persist the same way.
+**Difficulty (`DifficultyController`, the only place difficulty is computed).**
+
+progress = smoothstep(max(elapsed / **210 s**, score / **1500**))
+
+It's monotonic: it never decreases within a run. Every value below is interpolated start → end,
+and capped at its end value:
+
+| Parameter | Start | End (cap) |
+|---|---|---|
+| Spawn interval | 2.4 s | 0.7 s |
+| Max simultaneous enemies | 3 | 9 |
+| Enemy speed multiplier | 1.0× | 1.55× |
+| Attack wind-up (reaction time) | 1.0× | 0.75×, **never below 0.35 s** |
+| Archer shot interval | 1.0× | 0.65× |
+| Arrow speed | 1.0× | 1.25× |
+| Spawn mix | trolls/frogs | more goblins, archers, slimes |
+
+The game is endless until all three lives are lost. The HUD shows *threat %* = progress.
+
+**Leaderboard:** unchanged from v2: top 3 completed runs, persisted locally.
+
+---
+
+## Head movement
+
+**Source:** the glasses' orientation from Meta's **experimental Motion capability**
+(`MWDATMotion`, DAT 1.0.1). The companion starts it with the glasses session (30 Hz) and relays
+each orientation quaternion to the Mac (`motion` wire message). If Motion isn't enabled or
+available, the companion shows *Head motion: unavailable*. The game then aims with the hand only.
+Hand movement is never substituted for head movement.
+
+**Processing (`HeadPoseTracker`):**
+- **Baseline:** the first sample after head tracking starts or reconnects becomes "straight
+  ahead". Yaw and pitch are measured relative to it (an angular transform on quaternions; never
+  degrees as pixels).
+- **No jumps:**
+  - On re-acquisition, a continuity offset keeps the output where it was and then fades out
+    (time constant 2.5 s).
+  - While samples are missing (> 300 ms), the view eases back to center (time constant 0.8 s).
+  - **R** or **Recenter head** in Settings makes the current pose straight ahead, smoothly.
+- One-Euro smoothing on yaw and pitch.
+- **Sensitivity:** effective angle = measured angle × **Head movement sensitivity**. The range is
+  0–2, default **1.0×**, and 0 turns head movement off. The result is clamped to ±40° yaw and
+  ±12° pitch. It applies immediately and is saved.
+
+**What head movement does:**
+- It turns the in-game view (the world is rotated by the view yaw, and the horizon shifts with
+  pitch). That gives real parallax between the distant ridges, the world-placed ruins and torches,
+  and the enemies.
+- It turns the aim reference: world aim yaw = view yaw + hand yaw.
+- It turns the audio listener: sounds stay anchored to the enemies as you look around.
+
+**Unverified:** the Motion quaternion's axis convention isn't documented. The tracker assumes the
+common right-handed frame (x right, y up, z backward). If turning right moves the view left, set
+**Invert head direction** in Settings. Real glasses data has not been tested.
+
+---
+
+## Audio
+
+**Engine:** Apple's `AVAudioEngine` with an `AVAudioEnvironmentNode`, in the macOS plugin. There
+are no new packages. All 22 sound effects and the ambient loop are **synthesized procedurally**
+in Swift at startup (`SoundSynth.swift`): oscillators, noise, envelopes and filters, so there are
+no audio files and no licensing questions. The same engine code runs in the iPhone companion.
+
+**Sounds:**
+- menu hover and select
+- game start and restart
+- fireball cast, impact and fizzle
+- per-enemy defeat sounds
+- slime split
+- portal spawn shimmer
+- attack telegraphs (growl, bow draw) and arrow release
+- player hurt
+- lightning cast, plus one zap per chain target staggered along the chain
+- unlock fanfare, spell switch, game over
+
+There is also an ambient loop of wind, a low drone and ember crackle.
+
+**No duplicates:**
+- Every sound comes from a single simulation event, and casts are already one-per-gesture.
+- `AudioService` also blocks the same sound id from restarting within 40 ms (UI hover: 120 ms), so
+  repeated detections can't stack copies.
+
+**Positional audio.** Every enemy-related sound is placed at the enemy's game-world position. The
+listener sits at the player and turns with the head-driven view. Near sounds are louder (inverse
+distance falloff, reference 1.5 m, max 30 m, world scale 0.6 m/u), and a straight-ahead enemy is
+centered. Two modes are available in Settings:
+
+| Mode | What it is | Use for |
+|---|---|---|
+| **Stereo panning** (default) | Equal-power left/right panning plus distance attenuation. A stereo **simulation**, not true 3D. | Laptop speakers, the glasses' open-ear speakers |
+| **Binaural 3D** | Apple's HRTF rendering (`HRTFHQ`): direction via timing and spectral cues. | Headphones |
+
+Neither mode is surround sound. Neither is head-tracked by the operating system: the listener
+turns only with the in-game view (glasses Motion × sensitivity). `tool/audio_probe.sh` checks
+the engine offline by rendering it without speakers:
+- left/right placement and centering in both modes
+- distance falloff
+- the listener-turn direction
+- SFX volume
+
+**Output routing (Settings → Audio → Output).** Meta's camera toolkit has **no audio playback
+API**. Per Meta's docs, the glasses' speakers are reached through the **phone's** standard
+Bluetooth audio. So there are two supported ways to hear the game on the glasses:
+
+| Choice | Behavior |
+|---|---|
+| **Auto** (default) | If a Mac output device whose name looks like the glasses (Ray-Ban / Meta / Oakley) is connected to the Mac, use it; otherwise the Mac's default output. |
+| **Glasses via iPhone companion** | The Mac plays nothing and relays each sound event (id, world position, gain, listener yaw, volumes) to the companion. The companion plays it with the same spatial engine on the iPhone's current audio route, which is the glasses when they are the phone's connected Bluetooth audio device. Falls back to the Mac automatically while no phone is connected. |
+| **Mac system default** / a specific device | Plays on that macOS output. Devices are listed live and follow plug and unplug. A missing device falls back to the default. |
+
+**Manual macOS step (only for direct-to-Mac playback):** the glasses must be paired with the Mac as
+a Bluetooth audio device (System Settings → Bluetooth), and then selected in Settings or left on
+Auto. Whether a given pair of glasses accepts a Mac audio connection while it streams its camera
+through the phone is **not verified**; the iPhone relay is the path aligned with Meta's guidance.
+Settings shows the active route, and has **Test: left / right / far ahead** buttons to check
+direction by ear.
+
+**Not verified:** audio heard through actual glasses, by either path. Also unverified: whether
+iOS plays relayed audio through the glasses while DAT camera streaming is active over Bluetooth.
+
+---
+
+## Settings and persistence
+
+Settings (Start Menu → **Settings**) apply immediately and are stored locally (`shared_preferences`,
+key `settings.v1`):
+- head movement sensitivity and *Invert head direction*
+- SFX volume and ambient volume
+- positional mode (stereo or binaural) and output
+- hand hover-to-select time
+- camera inset
+
+Every slider also has **− / +** buttons, so it can be adjusted by hand-hover. **Reset settings to
+defaults** affects only these.
+
+**Permanent progression** (unlocked spells) is stored separately (`progression.v1`), and the
+leaderboard per game (`leaderboard.<gameId>`). Resetting settings never touches either. v2 settings
+(menu-control mode, casting hand) are ignored on load: both navigation methods are always on, and
+the left hand is the only casting hand.
 
 ---
 
@@ -293,7 +517,8 @@ settings persist the same way.
 glasses ──▶ │ iPhone companion → FrameServer → FramePipeline → Vision → TrackingController(tracker) │
             └───────────────────────────────────────────┬───────────────────────────────────────┘
                                                         │ TrackedHand (landmarks, smoothed center)
-lib/src/input/          CameraHandInput ── PoseClassifier (fist/open from landmarks)
+lib/src/input/          CameraHandInput ── PoseClassifier (fist/open/victory from landmarks)
+                        HeadInput ── HeadPoseTracker (glasses Motion quaternion → baseline-relative yaw/pitch)
                         SimulatedHandInput (dev)            │
                         HandInputHub  ── HandInputFrame {status, position, pose, confidence, frameId, simulated}
                                  │                                      │
@@ -310,11 +535,37 @@ lib/src/leaderboard/     Leaderboard (top 3, persisted)   lib/src/app/: AppServi
   a frame id, and a `simulated` flag. They never touch camera frames or the native layer.
   `CameraHandInput` is the only adapter from the camera pipeline, and it reuses the v1 tracker
   (sticky ids, smoothing, hold/expire) unchanged.
-- **Two independent consumers:**
+- **Independent consumers:**
   - UI: `DwellScope`/`DwellSelector` use the position only.
-  - Game: `CastGestureRecognizer` uses status, pose and confidence only.
+  - Game: `CastGestureRecognizer` (fist→open) and `SpellSwitchRecognizer` (held V sign) use pose and
+    status.
+  - Aiming: `StaffAim` uses the position, plus the head view from `HeadInput`.
 
-  Changing one can't break the other.
+  None depends on another.
+- **v3 modules:**
+
+  | Module | Role |
+  |---|---|
+  | `games/wizard/difficulty.dart` | Central difficulty controller |
+  | `aim.dart` | Hand + head → staff pose and aim |
+  | `spell_switch.dart` | Held V-sign spell switching |
+  | `wizard_audio.dart` | Game events → positioned sounds |
+  | `audio/audio_service.dart` | Settings, dedup, route |
+  | `app/progression.dart` | Permanent unlocks |
+  | `ui/camera_stream_indicator.dart` | Camera-stream indicator |
+  | `ui/menu/settings_screen.dart` | Settings screen |
+
+- **Native (Swift) additions:**
+
+  | File | Role |
+  |---|---|
+  | `SpatialAudioEngine.swift` | 3D voices, ambient loop, macOS device selection |
+  | `SoundSynth.swift` | Procedural sounds |
+  | `AudioController.swift` | Mac route choice and iPhone relay |
+
+  Two new wire messages: `motion` (phone→Mac) and `audio` (Mac→phone). Older peers ignore unknown
+  message types. The three shared Swift files exist in identical copies in the plugin and the
+  companion; `tool/link_selftest.sh` fails if they diverge.
 - **Pose classification** (`PoseClassifier`): for each finger (thumb ignored), it computes the ratio of the
   wrist→tip distance to the wrist→knuckle distance. On real Vision output, extended fingers measure 1.65–2.07
   and curled fingers 0.65–0.83. ≥3 extended and none curled = **open**; ≥3 curled and none
@@ -330,9 +581,29 @@ lib/src/leaderboard/     Leaderboard (top 3, persisted)   lib/src/app/: AppServi
   - subclasses implement `move()` and optionally `attackUpdate()`
   - a new enemy type = a subclass + an `EnemySpec` + one line in `createEnemy`
 - **Rendering**: one `CustomPainter` repainted from a `Ticker`. It does pseudo-3D projection
-  (`ArenaProjection`, the only world→screen math) and draws all art procedurally: no image assets and
-  no game engine. This version doesn't need Flame. Its sprites, collisions and camera aren't used,
-  and plain Flutter keeps the dependency list to one package.
+  (`ArenaProjection`, the only world→screen math, now with a view yaw/pitch) and draws all art
+  procedurally: no image assets and no game engine. Flame was considered and not needed.
+
+  v3 layers, back to front:
+  1. sky with drifting nebulae, twinkling stars and the moon (all turn with the view)
+  2. two mountain ridges at infinity
+  3. world-placed ruined pillars and an arch
+  4. flagstone grid in world space, with flickering torch light pools
+  5. drifting mist banks in front of and behind the enemies
+  6. stateless ember and mote particles
+  7. enemies sorted by camera depth, each with a ground shadow
+  8. effects
+  9. the staff in the foreground
+  10. HUD
+
+  Effects:
+  - **Fireball:** layered flickering core, ember trail particles, staff-tip cast flash and sparks,
+    impact (ground light, shockwave, core, sparks), a distinct per-enemy defeat ring with rising
+    soul wisps, fizzle smoke.
+  - **Chain Lightning:** jagged flickering arcs with branches, primary and chain target rings,
+    impact flashes, a brief sky flash.
+
+  Particles are capped (450 per kind). All effects are view-only state built from game events.
 - **Navigation**: `AppNavigator` holds a single route. Leaving the game route disposes the game widget
   and its ticker, so nothing runs behind the results screen. `finishRun` ignores stale or duplicate reports.
 - **Adding a minigame**: write a widget that takes a `MinigameHost` (hand input, settings,
@@ -588,6 +859,8 @@ All thresholds are in `HandTrackerConfig`.
 |---|---|
 | Dart tests: coordinates, view mapping (incl. inverse for all fit/mirror/rotation combos), geometry, One Euro filter, tracker, controller with a fake native layer, event parsing | `flutter test` |
 | Game tests: pose classifier (synthetic + real Vision landmarks), cast state machine, all game rules, dwell selection, leaderboard/settings persistence, navigation, camera-input adapter, full app flow widget tests | `flutter test test/games test/input test/ui test/platform test/app` |
+| v3 tests: difficulty, slime, Chain Lightning, unlock, spell switch, head tracker, staff/aim, settings/progression persistence, audio dedup and event→sound positions, dwell guard, stream indicator | `flutter test test/games/wizard_v3_test.dart test/input/head_and_staff_test.dart test/audio test/ui` |
+| Spatial audio engine, offline (no speakers): all sounds synthesize, L/R placement in stereo and binaural, distance falloff, listener turn direction, volume | `tool/audio_probe.sh` |
 | Static analysis | `flutter analyze` |
 | Link integration: real Mac `FrameServer` + real companion `FrameSender` over loopback; Bonjour, framing, backpressure, commands, disconnect, reconnect, corrupt input | `tool/link_selftest.sh` |
 | Detector on images (+ `--annotate DIR` overlay PNGs, `--landmarks` raw output) | `tool/vision_probe.sh img.jpg` |
@@ -595,7 +868,7 @@ All thresholds are in `HandTrackerConfig`.
 | Companion compile check | `xcodebuild -project companion_ios/MetaRayzerCompanion.xcodeproj -scheme MetaRayzerCompanion -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` |
 
 **Real-app gesture check without glasses:** composite a fist photo and an open-palm photo into
-504×896 frames, with the hand where you want the cursor. Switch to *Hand (hover to select)*, then
+504×896 frames, with the hand where you want the cursor (hand navigation is always on), then
 stream e.g. 4 s of fist frames followed by 1 s of open-palm frames with `send_frames.py`. The app
 logs `[metarayzer] screen: PlayingRoute` and one `[metarayzer] fireball cast: …` per fist→open
 transition. Keep the MetaRayzer window **visible**: macOS pauses rendering (and with it the game and
@@ -626,8 +899,13 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
 | Companion signing errors about Hotspot / Wi-Fi Info | See [step 3.3](#3-configure-and-install-the-iphone-companion). |
 | Fireballs don't fire | Watch **seen:** under the orb. Fist must read `fist`, then `open`. Point your fingers **up**, not toward the camera (foreshortened fingers look curled), keep the hand inside the camera inset, and make a full fist (all four fingers). |
 | Fires while I don't mean to | Every fist→open fires once by design. Keep the hand closed (or out of view) between casts. |
-| Hand cursor never selects anything | *Menu control* must be *Hand*, and the status must say *Hand detected*. Hold still for the hover time; leave the button and come back to re-trigger it. Mouse clicks always work. |
+| Hand cursor never selects anything | The status must say *Left hand detected*. Hold still for the hover time; leave the button and come back to re-trigger it. Mouse clicks always work. |
 | Game or menu freezes when another window covers it | macOS pauses rendering for hidden windows. Keep the game window visible. |
+| No sound | Settings → Audio: check the volumes and the route line (*Playing on …*). Use **Test: left/right**. With *Glasses via iPhone*, the companion must be connected and in the foreground, and the iPhone's own volume up. |
+| Sound comes from the wrong side when I turn my head | Settings → **Invert head direction** (the glasses' Motion axes are undocumented). Press **R** to recenter. |
+| The view drifts or turns on its own | Press **R** (recenter), or lower the head sensitivity (0 = off). |
+| Companion shows *Head motion: unavailable* | Enable the experimental Motion capability for the app in the Wearables Developer Center, and update the glasses and Meta AI. The game still works with hand aim only. |
+| V sign doesn't switch spells | Chain Lightning must be unlocked (score 300 in a run). Hold index + middle fingers up with the others curled for about half a second; **seen: victory** should show. Q/Tab and clicking work too. |
 | Reset the leaderboard / settings | `defaults delete ~/Library/Containers/com.metarayzer.metarayzer/Data/Library/Preferences/com.metarayzer.metarayzer` |
 
 ---
@@ -642,9 +920,12 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
     with fingers pointing **up**.
   - Vision's left/right label for your own hands seen from behind is untested (*Either* is the fallback).
   - Thresholds live in `PoseClassifierConfig` if real footage needs tuning.
+- **Head tracking** uses an experimental DAT capability with an undocumented axis convention, and
+  hasn't been tested with real glasses (see [Head movement](#head-movement)).
+- **Audio through the glasses** hasn't been heard or tested by either path; the stereo mode is a
+  panning simulation, the binaural mode is HRTF, and neither is OS head-tracked (see [Audio](#audio)).
 - **Gesture latency** is the camera path plus ~80 ms of confirmation (2 frames at 24 fps).
   Lowering `CastGestureConfig.confirmFrames` to 1 makes it snappier, at the cost of more false casts.
-- **No audio** yet: feedback is visual (screen shake, red vignette, heart pulse, telegraphs).
 - **Hardware-dependent steps aren't verified yet.** The full phone + glasses path is implemented
   against DAT 1.0.1 and compiles, but hasn't been run on physical devices. See the
   [status table](#status-what-is-verified).
@@ -657,10 +938,9 @@ detect, … hands/frame`). See it with `flutter run -d macos`, or in Console.app
   Store distribution of DAT apps depends on Meta's terms ([Meta Wearables Developer Terms](https://wearables.developer.meta.com/terms)).
 - **Android companion** is not implemented. The Mac side is protocol-compatible: an Android app using
   `meta-wearables-dat-android` only needs to implement the 4-message protocol.
-- **Future:** Game Select screen and more minigames, spells and power-ups (enemy health and
-  spell damage are already modeled), sound, aiming with hand position or head orientation (DAT's
-  experimental Motion capability), H.264/HEVC transport, a `Texture`-based preview, and detection
-  on the phone.
+- **Future:** Game Select screen and more minigames, more spells and power-ups (the spell book,
+  enemy health and damage falloff are already modeled), recorded sound assets, H.264/HEVC transport,
+  a `Texture`-based preview, and detection on the phone.
 
 ---
 
@@ -687,8 +967,9 @@ frame source in `metarayzer_native` that feeds `FramePipeline.submit()`. That so
 
 ```
 lib/src/app/                 app services, settings, root shell (navigation + dwell + dev input)
-lib/src/input/               hand-input interface, camera adapter, pose classifier, simulated hand
-lib/src/games/wizard/        Wizard's Stand: config, enemies, game model, cast recognizer, view/
+lib/src/input/               hand/head input, camera adapter, pose classifier, head tracker, simulated input
+lib/src/audio/               AudioService (settings, dedup, route) over the native spatial engine
+lib/src/games/wizard/        Wizard's Stand: config, difficulty, enemies, game model, spells, aim, recognizers, audio, view/
 lib/src/platform/            navigator, minigame definition/host, run results
 lib/src/ui/                  menus (fantasy theme), dwell selection, v1 tracking views
 lib/src/leaderboard/         persisted top-3 scores
@@ -696,6 +977,6 @@ lib/src/{geometry,tracking}/ v1 coordinate math, tracker, One Euro filter
 packages/metarayzer_native/  macOS Swift plugin: frame link, pipeline, Vision detector, webcam
 companion_ios/               iPhone companion (Swift/SwiftUI, Meta DAT 1.0.1, XcodeGen project.yml)
 test/                        Dart tests (fixtures/: real Vision landmarks)
-tool/                        send_frames.py, vision_probe.sh, link_selftest.sh
+tool/                        send_frames.py, vision_probe.sh, link_selftest.sh, audio_probe.sh
 macos/                       Flutter macOS runner (entitlements: network server/client, camera)
 ```

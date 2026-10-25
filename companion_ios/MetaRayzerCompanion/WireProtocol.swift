@@ -16,6 +16,10 @@
 //                            UInt16 BE width, UInt16 BE height, JPEG bytes
 //   .status  (phone -> mac)  UTF-8 JSON, see CompanionStatus keys
 //   .command (mac -> phone)  UTF-8 JSON {"cmd":"startStream"|"stopStream"}
+//   .motion  (phone -> mac)  Float32 BE qx, qy, qz, qw (glasses orientation), Int64 BE device ns
+//   .audio   (mac -> phone)  UTF-8 JSON sound relay: {"op":"play","s":id,"x","y","z","g"} or
+//                            {"op":"config","sfx","amb","mode","yaw","ambient"}
+// Receivers ignore message types they don't know, so v1 peers stay compatible.
 
 import Foundation
 
@@ -27,6 +31,7 @@ enum WireProtocol {
   static let maxMessageBytes = 8 * 1024 * 1024
   static let headerBytes = 4
   static let frameHeaderBytes = 4 + 8 + 2 + 2
+  static let motionBytes = 4 * 4 + 8
 }
 
 enum MessageType: UInt8 {
@@ -34,6 +39,16 @@ enum MessageType: UInt8 {
   case frame = 2
   case status = 3
   case command = 4
+  case motion = 5
+  case audio = 6
+}
+
+struct MotionMessage {
+  var qx: Float
+  var qy: Float
+  var qz: Float
+  var qw: Float
+  var timestampNs: Int64
 }
 
 struct FrameMessage {
@@ -56,6 +71,8 @@ enum WireMessage {
   case frame(FrameMessage)
   case status([String: Any])
   case command([String: Any])
+  case motion(MotionMessage)
+  case audio([String: Any])
 }
 
 enum WireCodec {
@@ -82,6 +99,13 @@ enum WireCodec {
     return encode(type: .frame, payload: payload)
   }
 
+  static func encodeMotion(_ m: MotionMessage) -> Data {
+    var payload = Data(capacity: WireProtocol.motionBytes)
+    for f in [m.qx, m.qy, m.qz, m.qw] { appendUInt32(&payload, f.bitPattern) }
+    appendUInt64(&payload, UInt64(bitPattern: m.timestampNs))
+    return encode(type: .motion, payload: payload)
+  }
+
   /// Reads the 4-byte length prefix. Returns the body length or throws for corrupt input.
   static func bodyLength(header: Data) throws -> Int {
     let length = Int(readUInt32(header, at: header.startIndex))
@@ -105,6 +129,12 @@ enum WireCodec {
         width: readUInt16(payload, at: base + 12),
         height: readUInt16(payload, at: base + 14),
         jpeg: Data(payload[(base + WireProtocol.frameHeaderBytes)...])))
+    case .motion:
+      guard payload.count >= WireProtocol.motionBytes else { throw WireError.truncatedFrame }
+      let b = payload.startIndex
+      func f(_ i: Int) -> Float { Float(bitPattern: readUInt32(payload, at: b + i * 4)) }
+      return .motion(MotionMessage(qx: f(0), qy: f(1), qz: f(2), qw: f(3), timestampNs: Int64(bitPattern: readUInt64(payload, at: b + 16))))
+    case .audio: return .audio(decodeJSON(payload))
     case .hello: return .hello(decodeJSON(payload))
     case .status: return .status(decodeJSON(payload))
     case .command: return .command(decodeJSON(payload))

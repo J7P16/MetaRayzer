@@ -7,28 +7,35 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		050D4657BF65BA04BF1535EF /* SoundSynth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913A3FC2BA91EFA006F6B1D0 /* SoundSynth.swift */; };
 		1EBEE6B88A759FDC0F21BEF1 /* WireProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F0C9EB4377ECC138A481F7 /* WireProtocol.swift */; };
 		3274E90E162F314F8A0584BA /* FrameSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843EF3377A0134F05ABE719B /* FrameSender.swift */; };
 		535747B77F501BE0A5F707F6 /* MacLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCF46930B39DF8EE37A3E2C /* MacLink.swift */; };
+		5D1AA0B15380EE29A09378FC /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = 0077E02490919F582AC07181 /* MWDATMockDevice */; };
 		6DFAD7AEECCBF442E463E918 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6044891745927F4D640C87DA /* ContentView.swift */; };
 		74710D7E654454C77871DB38 /* MWDATCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 3B48E0607148A0A4BCF541BF /* MWDATCamera */; };
+		852DA9326A1294CE759C6B15 /* CompanionAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A30CFB75F3B4D2BF424832 /* CompanionAudio.swift */; };
 		85C7B32A31238DA0EA0D8E29 /* GlassesController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD40151D910FD95B60BA8D2 /* GlassesController.swift */; };
 		9F0423B6B1592BC1A4B19034 /* CompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28FC730EBC5FA9E8884D8F29 /* CompanionApp.swift */; };
 		9F42ABF182DCEF05317C70B0 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = D39CBD3798C5FCA5CA9F6C02 /* MWDATCore */; };
 		D946C37F6E2E20D3E7AAC0C0 /* FrameEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8911F05B8E539D40A24BAED4 /* FrameEncoder.swift */; };
-		E67868753A2C633D1FE69B06 /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = 0077E02490919F582AC07181 /* MWDATMockDevice */; };
+		E67868753A2C633D1FE69B06 /* MWDATMotion in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1833AF439B6A5A5C688EF8 /* MWDATMotion */; };
+		FB1028D8DE3D499AADBFEADE /* SpatialAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CBB21514DDF3A85B3E52250 /* SpatialAudioEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0CCF46930B39DF8EE37A3E2C /* MacLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLink.swift; sourceTree = "<group>"; };
 		28FC730EBC5FA9E8884D8F29 /* CompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionApp.swift; sourceTree = "<group>"; };
 		4AD40151D910FD95B60BA8D2 /* GlassesController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesController.swift; sourceTree = "<group>"; };
+		4CBB21514DDF3A85B3E52250 /* SpatialAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialAudioEngine.swift; sourceTree = "<group>"; };
 		4FB3E975BD3F7E77572C3A25 /* MetaRayzerCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MetaRayzerCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6044891745927F4D640C87DA /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		843EF3377A0134F05ABE719B /* FrameSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSender.swift; sourceTree = "<group>"; };
 		8911F05B8E539D40A24BAED4 /* FrameEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameEncoder.swift; sourceTree = "<group>"; };
+		913A3FC2BA91EFA006F6B1D0 /* SoundSynth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundSynth.swift; sourceTree = "<group>"; };
 		A9F0C9EB4377ECC138A481F7 /* WireProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireProtocol.swift; sourceTree = "<group>"; };
-		"TEMP_FC349BF6-44DD-4232-BDDB-9EB662772042" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		F4A30CFB75F3B4D2BF424832 /* CompanionAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionAudio.swift; sourceTree = "<group>"; };
+		"TEMP_B1DA08A6-E416-41E4-AAA0-28FEC8FC0151" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -38,7 +45,8 @@
 			files = (
 				9F42ABF182DCEF05317C70B0 /* MWDATCore in Frameworks */,
 				74710D7E654454C77871DB38 /* MWDATCamera in Frameworks */,
-				E67868753A2C633D1FE69B06 /* MWDATMockDevice in Frameworks */,
+				E67868753A2C633D1FE69B06 /* MWDATMotion in Frameworks */,
+				5D1AA0B15380EE29A09378FC /* MWDATMockDevice in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,20 +73,23 @@
 			isa = PBXGroup;
 			children = (
 				28FC730EBC5FA9E8884D8F29 /* CompanionApp.swift */,
+				F4A30CFB75F3B4D2BF424832 /* CompanionAudio.swift */,
 				6044891745927F4D640C87DA /* ContentView.swift */,
 				8911F05B8E539D40A24BAED4 /* FrameEncoder.swift */,
 				843EF3377A0134F05ABE719B /* FrameSender.swift */,
 				4AD40151D910FD95B60BA8D2 /* GlassesController.swift */,
 				0CCF46930B39DF8EE37A3E2C /* MacLink.swift */,
+				913A3FC2BA91EFA006F6B1D0 /* SoundSynth.swift */,
+				4CBB21514DDF3A85B3E52250 /* SpatialAudioEngine.swift */,
 				A9F0C9EB4377ECC138A481F7 /* WireProtocol.swift */,
 			);
 			path = MetaRayzerCompanion;
 			sourceTree = "<group>";
 		};
-		"TEMP_ADD1869A-F739-4B82-9394-1A134C656597" /* companion_ios */ = {
+		"TEMP_9C7C953B-95E2-4FFC-BFCF-00B8DD98ED12" /* companion_ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_FC349BF6-44DD-4232-BDDB-9EB662772042" /* Config.xcconfig */,
+				"TEMP_B1DA08A6-E416-41E4-AAA0-28FEC8FC0151" /* Config.xcconfig */,
 			);
 			path = companion_ios;
 			sourceTree = "<group>";
@@ -101,6 +112,7 @@
 			packageProductDependencies = (
 				D39CBD3798C5FCA5CA9F6C02 /* MWDATCore */,
 				3B48E0607148A0A4BCF541BF /* MWDATCamera */,
+				7A1833AF439B6A5A5C688EF8 /* MWDATMotion */,
 				0077E02490919F582AC07181 /* MWDATMockDevice */,
 			);
 			productName = MetaRayzerCompanion;
@@ -150,11 +162,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				9F0423B6B1592BC1A4B19034 /* CompanionApp.swift in Sources */,
+				852DA9326A1294CE759C6B15 /* CompanionAudio.swift in Sources */,
 				6DFAD7AEECCBF442E463E918 /* ContentView.swift in Sources */,
 				D946C37F6E2E20D3E7AAC0C0 /* FrameEncoder.swift in Sources */,
 				3274E90E162F314F8A0584BA /* FrameSender.swift in Sources */,
 				85C7B32A31238DA0EA0D8E29 /* GlassesController.swift in Sources */,
 				535747B77F501BE0A5F707F6 /* MacLink.swift in Sources */,
+				050D4657BF65BA04BF1535EF /* SoundSynth.swift in Sources */,
+				FB1028D8DE3D499AADBFEADE /* SpatialAudioEngine.swift in Sources */,
 				1EBEE6B88A759FDC0F21BEF1 /* WireProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -164,7 +179,7 @@
 /* Begin XCBuildConfiguration section */
 		2BCB32FF512158515250E652 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_FC349BF6-44DD-4232-BDDB-9EB662772042" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_B1DA08A6-E416-41E4-AAA0-28FEC8FC0151" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -228,7 +243,7 @@
 		};
 		B43A8E0B13CA96B91916170A /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_FC349BF6-44DD-4232-BDDB-9EB662772042" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_B1DA08A6-E416-41E4-AAA0-28FEC8FC0151" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -371,6 +386,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B267CEE39946763BB07BAFF4 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATCamera;
+		};
+		7A1833AF439B6A5A5C688EF8 /* MWDATMotion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B267CEE39946763BB07BAFF4 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
+			productName = MWDATMotion;
 		};
 		D39CBD3798C5FCA5CA9F6C02 /* MWDATCore */ = {
 			isa = XCSwiftPackageProductDependency;

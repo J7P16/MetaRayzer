@@ -11,14 +11,17 @@ class CursorMapper {
   /// Region of the camera view (normalized) mapped onto the full viewport.
   final Rect box;
 
+  CursorMapper copyWithBox(Rect box) => CursorMapper(box: box);
+
+  /// Camera position → 0..1 within the interaction box (clamped).
+  Offset normalize(Offset handNormalized) => Offset(
+        ((handNormalized.dx - box.left) / box.width).clamp(0.0, 1.0),
+        ((handNormalized.dy - box.top) / box.height).clamp(0.0, 1.0),
+      );
+
   Offset map(Offset handNormalized, Size viewport, {bool simulated = false}) {
     // The simulated hand already is a viewport position.
-    final n = simulated
-        ? handNormalized
-        : Offset(
-            ((handNormalized.dx - box.left) / box.width).clamp(0.0, 1.0),
-            ((handNormalized.dy - box.top) / box.height).clamp(0.0, 1.0),
-          );
+    final n = simulated ? handNormalized : normalize(handNormalized);
     return Offset(n.dx * viewport.width, n.dy * viewport.height);
   }
 }
@@ -51,6 +54,15 @@ class DwellSelector {
 
   Object? get lastActivated => _lastActivated;
   double get secondsSinceActivation => _sinceActivation;
+
+  /// Records an activation that happened by another route (e.g. a mouse click) so the hand
+  /// hovering the same target can't fire it again during this hover.
+  void lockOn(Object target) {
+    _locked = target;
+    _progress = 0;
+    _lastActivated = target;
+    _sinceActivation = 0;
+  }
 
   void reset() {
     _hovered = null;

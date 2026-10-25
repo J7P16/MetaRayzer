@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:metarayzer/src/app/app_settings.dart';
 import 'package:metarayzer/src/app/key_value_store.dart';
-import 'package:metarayzer/src/input/hand_input.dart';
+import 'package:metarayzer/src/app/progression.dart';
 import 'package:metarayzer/src/leaderboard/leaderboard.dart';
 import 'package:metarayzer/src/platform/app_navigator.dart';
 import 'package:metarayzer/src/platform/minigame.dart';
@@ -58,21 +58,57 @@ void main() {
   });
 
   group('AppSettings', () {
-    test('persists preferences but never restores the simulated hand', () async {
+    test('persists preferences (incl. head sensitivity and volumes) but never the simulated input', () async {
       final store = MemoryStore();
       final a = AppSettings(store: store)
-        ..uiControlMode = UiControlMode.hand
         ..dwellSeconds = 1.6
-        ..handPreference = HandPreference.right
-        ..simulatedHand = true;
-      expect(a.simulatedHand, isTrue);
+        ..headSensitivity = 1.4
+        ..invertHeadYaw = true
+        ..sfxVolume = 0.3
+        ..ambientVolume = 0.1
+        ..spatialMode = SpatialMode.binaural
+        ..audioOutput = AudioOutputChoice.companion
+        ..simulatedInput = true;
+      expect(a.simulatedInput, isTrue);
       await Future<void>.delayed(Duration.zero);
       final b = AppSettings(store: store);
       await b.load();
-      expect(b.uiControlMode, UiControlMode.hand);
       expect(b.dwellSeconds, closeTo(1.6, 1e-9));
-      expect(b.handPreference, HandPreference.right);
-      expect(b.simulatedHand, isFalse, reason: 'normal launches always use the real camera');
+      expect(b.headSensitivity, closeTo(1.4, 1e-9));
+      expect(b.invertHeadYaw, isTrue);
+      expect((b.sfxVolume, b.ambientVolume), (0.3, 0.1));
+      expect(b.spatialMode, SpatialMode.binaural);
+      expect(b.audioOutput, AudioOutputChoice.companion);
+      expect(b.simulatedInput, isFalse, reason: 'normal launches always use the real camera');
+    });
+
+    test('v2 settings load without errors; removed options are ignored', () async {
+      final store = MemoryStore()..values['settings.v1'] = '{"uiControlMode":"hand","dwellSeconds":1.4,"handPreference":"right","showCameraInset":false}';
+      final s = AppSettings(store: store);
+      await s.load();
+      expect(s.dwellSeconds, closeTo(1.4, 1e-9));
+      expect(s.showCameraInset, isFalse);
+      expect(s.headSensitivity, AppSettings.defaultHeadSensitivity);
+    });
+
+    test('sensitivity and volumes are clamped', () {
+      final s = AppSettings(store: MemoryStore())
+        ..headSensitivity = 5
+        ..sfxVolume = -1;
+      expect(s.headSensitivity, AppSettings.maxHeadSensitivity);
+      expect(s.sfxVolume, 0);
+    });
+
+    test('resetting settings keeps permanent progression', () async {
+      final store = MemoryStore();
+      final settings = AppSettings(store: store)..headSensitivity = 0.4;
+      final progression = Progression(store: store);
+      await progression.unlock('chain_lightning');
+      settings.resetToDefaults();
+      final reloaded = Progression(store: store);
+      await reloaded.load();
+      expect(settings.headSensitivity, AppSettings.defaultHeadSensitivity);
+      expect(reloaded.isUnlocked('chain_lightning'), isTrue);
     });
 
     test('dwell time is clamped to a sane range', () {
@@ -80,6 +116,20 @@ void main() {
       expect(s.dwellSeconds, AppSettings.minDwellSeconds);
       s.dwellSeconds = 99;
       expect(s.dwellSeconds, AppSettings.maxDwellSeconds);
+    });
+  });
+
+  group('Progression', () {
+    test('unlock persists across restarts and fires only once', () async {
+      final store = MemoryStore();
+      final p = Progression(store: store);
+      await p.load();
+      expect(p.isUnlocked('chain_lightning'), isFalse);
+      expect(await p.unlock('chain_lightning'), isTrue);
+      expect(await p.unlock('chain_lightning'), isFalse);
+      final again = Progression(store: store);
+      await again.load();
+      expect(again.isUnlocked('chain_lightning'), isTrue);
     });
   });
 

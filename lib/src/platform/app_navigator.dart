@@ -34,6 +34,11 @@ class SetupRoute extends AppRoute {
   const SetupRoute();
 }
 
+/// Preferences: head sensitivity, audio, menu hover time.
+class SettingsRoute extends AppRoute {
+  const SettingsRoute();
+}
+
 /// App-level navigation state. A single source of truth makes it impossible for a game to keep
 /// running behind the results screen: leaving [PlayingRoute] disposes the game widget.
 class AppNavigator extends ChangeNotifier {
@@ -57,6 +62,7 @@ class AppNavigator extends ChangeNotifier {
 
   void openStartMenu() => _go(const StartMenuRoute());
   void openSetup() => _go(const SetupRoute());
+  void openSettings() => _go(const SettingsRoute());
 
   /// Play button. With one game there is no Game Select yet.
   void playDefault() => play(games.first);
